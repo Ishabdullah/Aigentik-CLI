@@ -1,0 +1,17 @@
+{
+  "name": "aigentik",
+  "version": "1.0.0",
+  "description": "Aigentik — Local AI assistant for email and SMS management",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-imap": "^0.9.6",
+    "nodemailer": "^6.9.9",
+    "mailparser": "^3.6.6",
+    "node-fetch": "^2.7.0"
+  },
+  "author": "Aigentik",
+  "license": "MIT"
+}
