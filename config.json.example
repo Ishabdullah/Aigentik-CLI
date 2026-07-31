@@ -1,0 +1,43 @@
+{
+  "owner": {
+    "admin_number": "15551234567",
+    "admin_number_formatted": "+15551234567",
+    "aigentik_number": "15559876543",
+    "aigentik_number_formatted": "+15559876543"
+  },
+  "gmail": {
+    "email": "your@gmail.com",
+    "app_password": "xxxx xxxx xxxx xxxx",
+    "imap_host": "imap.gmail.com",
+    "imap_port": 993,
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587
+  },
+  "llama": {
+    "host": "http://127.0.0.1:8080",
+    "model": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    "model_path": "/storage/emulated/0/Download/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    "llama_server_path": "/data/data/com.termux/files/home/llama.cpp/build/bin/llama-server",
+    "context_size": 4096,
+    "max_tokens": 512,
+    "temperature": 0.7,
+    "threads": 4
+  },
+  "sms": {
+    "poll_interval_ms": 30000,
+    "max_sms_fetch": 10
+  },
+  "behavior": {
+    "paused": false,
+    "pause_email": false,
+    "pause_sms": false,
+    "require_confirmation_for_destructive": true,
+    "default_unmatched_action": "auto-reply",
+    "tone_matching": true
+  },
+  "paths": {
+    "data_dir": "/data/data/com.termux/files/home/aigentik/data",
+    "logs_dir": "/data/data/com.termux/files/home/aigentik/data/logs",
+    "conversations_dir": "/data/data/com.termux/files/home/aigentik/data/conversations"
+  }
+}

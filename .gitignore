@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Configuration with secrets
+config.json
+
+# Data files (generated at runtime)
+data/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup-*
+index.backup-*
