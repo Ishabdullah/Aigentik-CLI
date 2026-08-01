@@ -36,8 +36,8 @@
     "tone_matching": true
   },
   "paths": {
-    "data_dir": "/data/data/com.termux/files/home/aigentik/data",
-    "logs_dir": "/data/data/com.termux/files/home/aigentik/data/logs",
-    "conversations_dir": "/data/data/com.termux/files/home/aigentik/data/conversations"
+    "data_dir": "/data/data/com.termux/files/home/Aigentik-CLI/data",
+    "logs_dir": "/data/data/com.termux/files/home/Aigentik-CLI/data/logs",
+    "conversations_dir": "/data/data/com.termux/files/home/Aigentik-CLI/data/conversations"
   }
 }

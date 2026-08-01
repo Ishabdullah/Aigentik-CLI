@@ -75,8 +75,8 @@ make -j$(nproc)
 
 ### 4. Clone & Configure Aigentik
 ```bash
-git clone https://github.com/yourusername/Aigentik-CLI.git ~/aigentik
-cd ~/aigentik
+git clone https://github.com/yourusername/Aigentik-CLI.git ~/Aigentik-CLI
+cd ~/Aigentik-CLI
 npm install  # Installs node-imap, nodemailer, mailparser, node-fetch@2
 ```
 
@@ -110,9 +110,9 @@ Copy `config.json.example` to `config.json` and fill in:
     "threads": 4
   },
   "paths": {
-    "data_dir": "/data/data/com.termux/files/home/aigentik/data",
-    "logs_dir": "/data/data/com.termux/files/home/aigentik/data/logs",
-    "conversations_dir": "/data/data/com.termux/files/home/aigentik/data/conversations"
+    "data_dir": "/data/data/com.termux/files/home/Aigentik-CLI/data",
+    "logs_dir": "/data/data/com.termux/files/home/Aigentik-CLI/data/logs",
+    "conversations_dir": "/data/data/com.termux/files/home/Aigentik-CLI/data/conversations"
   }
 }
 ```
@@ -128,7 +128,7 @@ Copy `config.json.example` to `config.json` and fill in:
 
 ### Start Aigentik
 ```bash
-cd ~/aigentik
+cd ~/Aigentik-CLI
 ./start.sh
 ```
 
@@ -205,7 +205,7 @@ Actions: `auto-reply`, `review`, `spam`
 
 ## Data Files
 
-All persistent data in `~/aigentik/data/`:
+All persistent data in `~/Aigentik-CLI/data/`:
 | File | Description |
 |------|-------------|
 | `contacts.json` | Contact directory (auto-built + manual) |

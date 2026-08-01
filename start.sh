@@ -2,7 +2,7 @@
 # start.sh — Aigentik startup script
 # Run this from native Termux to start everything
 
-AIGENTIK_DIR="/data/data/com.termux/files/home/aigentik"
+AIGENTIK_DIR="/data/data/com.termux/files/home/Aigentik-CLI"
 
 echo ""
 echo "🤖 Starting Aigentik..."
@@ -23,7 +23,7 @@ fi
 # Check config has been filled in
 EMAIL=$(node -e "const c=require('$AIGENTIK_DIR/config.json'); console.log(c.gmail.email)" 2>/dev/null)
 if [ -z "$EMAIL" ]; then
-  echo "❌ Gmail not configured. Edit ~/aigentik/config.json first."
+  echo "❌ Gmail not configured. Edit ~/Aigentik-CLI/config.json first."
   echo "   Set your gmail.email and gmail.app_password"
   exit 1
 fi
@@ -46,6 +46,6 @@ if tmux has-session -t aigentik 2>/dev/null; then
   echo "  ./stop.sh                  — stop Aigentik"
   echo ""
 else
-  echo "❌ Aigentik failed to start. Run: node ~/aigentik/index.js to see errors"
+  echo "❌ Aigentik failed to start. Run: node ~/Aigentik-CLI/index.js to see errors"
 fi
 
