@@ -70,7 +70,7 @@ make -j$(nproc)
 ### 3. Download Model
 ```bash
 # Qwen3-4B-Instruct-2507-Q4_K_M.gguf (~2.5 GB)
-# Place at: /storage/emulated/0/Download/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+# Place at: ~/models/qwen3-4b-instruct/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 ```
 
 ### 4. Clone & Configure Aigentik
@@ -102,7 +102,7 @@ Copy `config.json.example` to `config.json` and fill in:
   "llama": {
     "host": "http://127.0.0.1:8080",
     "model": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-    "model_path": "/storage/emulated/0/Download/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    "model_path": "~/models/qwen3-4b-instruct/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
     "llama_server_path": "/data/data/com.termux/files/home/llama.cpp/build/bin/llama-server",
     "context_size": 4096,
     "max_tokens": 512,
@@ -247,7 +247,7 @@ All persistent data in `~/aigentik/data/`:
 ls -la ~/llama.cpp/build/bin/llama-server
 
 # Test manually
-~/llama.cpp/build/bin/llama-server -m "~/model.gguf" -c 4096 --host 127.0.0.1 --port 8080
+~/llama.cpp/build/bin/llama-server -m "~/models/qwen3-4b-instruct/Qwen3-4B-Instruct-2507-Q4_K_M.gguf" -c 4096 --host 127.0.0.1 --port 8080
 ```
 
 ### Gmail connection fails
