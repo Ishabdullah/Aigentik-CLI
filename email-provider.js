@@ -471,6 +471,41 @@ class EmailProvider {
   }
 
   /**
+   * Scan every message in the inbox, parse it, and move to Spam only the ones
+   * where predicate({ from, subject, body }) returns true. Used for filters
+   * (e.g. "promotional") that aren't expressible as a single IMAP SEARCH query
+   * and have to be evaluated against the actual message content.
+   */
+  async spamMatchingEmails(predicate) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search({ all: true }, { uid: true });
+      if (!uids.length) return { spam: 0, scanned: 0 };
+
+      const matchedUids = [];
+      for await (const msg of client.fetch(uids, { source: true, uid: true }, { uid: true })) {
+        try {
+          const email = await this.parseMessage(msg.source);
+          if (predicate({ from: email.from_email, subject: email.subject, body: email.body })) {
+            matchedUids.push(msg.uid);
+          }
+        } catch (error) {
+          this.logger.warn('email-provider', 'Failed to parse message while scanning for spam match', {
+            error: error.message,
+            uid: msg.uid
+          });
+        }
+      }
+
+      if (!matchedUids.length) return { spam: 0, scanned: uids.length };
+
+      await client.messageMove(matchedUids, '[Gmail]/Spam', { uid: true });
+      this.logger.action('email-provider', `Marked ${matchedUids.length} of ${uids.length} scanned email(s) as spam`);
+      return { spam: matchedUids.length, scanned: uids.length };
+    });
+  }
+
+  /**
    * Mark emails as read
    */
   async markAsRead(criteria) {

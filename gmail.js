@@ -126,6 +126,14 @@ async function markAsSpam(criteria) {
 }
 
 /**
+ * Scan the inbox and move to spam only messages matching predicate({from, subject, body})
+ */
+async function spamMatchingEmails(predicate) {
+  const provider = getProvider();
+  return provider.spamMatchingEmails(predicate);
+}
+
+/**
  * Mark emails as read
  */
 async function markAsRead(criteria) {
@@ -193,6 +201,7 @@ export {
   deleteEmails,
   archiveEmails,
   markAsSpam,
+  spamMatchingEmails,
   markAsRead,
   markAsUnread,
   labelEmails,
@@ -212,6 +221,7 @@ export default {
   deleteEmails,
   archiveEmails,
   markAsSpam,
+  spamMatchingEmails,
   markAsRead,
   markAsUnread,
   labelEmails,

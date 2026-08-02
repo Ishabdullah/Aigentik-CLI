@@ -13,6 +13,7 @@ describe('gmail.js compatibility wrapper', () => {
     expect(typeof gmail.deleteEmails).toBe('function');
     expect(typeof gmail.archiveEmails).toBe('function');
     expect(typeof gmail.markAsSpam).toBe('function');
+    expect(typeof gmail.spamMatchingEmails).toBe('function');
     expect(typeof gmail.markAsRead).toBe('function');
     expect(typeof gmail.markAsUnread).toBe('function');
     expect(typeof gmail.labelEmails).toBe('function');
@@ -31,6 +32,7 @@ describe('gmail.js compatibility wrapper', () => {
     expect(defaultExport.deleteEmails).toBeDefined();
     expect(defaultExport.archiveEmails).toBeDefined();
     expect(defaultExport.markAsSpam).toBeDefined();
+    expect(defaultExport.spamMatchingEmails).toBeDefined();
     expect(defaultExport.markAsRead).toBeDefined();
     expect(defaultExport.markAsUnread).toBeDefined();
     expect(defaultExport.labelEmails).toBeDefined();

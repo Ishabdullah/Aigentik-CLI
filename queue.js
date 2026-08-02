@@ -33,7 +33,7 @@ function generateItemId(queue) {
 }
 
 // Add item to queue — returns the queue item with display_id
-function addToQueue({ type, sender, senderName, subject, body, draftReply, contactId }) {
+function addToQueue({ type, sender, senderName, subject, body, draftReply, contactId, replyToEmail, originalSubject }) {
   const queue = loadQueue();
   const displayId = generateItemId(queue);
 
@@ -46,6 +46,11 @@ function addToQueue({ type, sender, senderName, subject, body, draftReply, conta
     body: body?.substring(0, 500) || '',
     draft_reply: draftReply || null,
     contact_id: contactId || null,
+    // For type 'sms' items sourced from a Google Voice forwarded email: the
+    // email address/subject needed to reply via gmail.replyToGoogleVoiceText
+    // instead of sending SMS directly.
+    reply_to_email: replyToEmail || null,
+    original_subject: originalSubject || null,
     queued_at: new Date().toISOString(),
     status: 'pending'
   };

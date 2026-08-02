@@ -11,7 +11,6 @@ import * as contacts from './contacts.js';
 import fs from 'fs';
 import path from 'path';
 import * as contactsSync from './contacts-sync.js';
-import * as smsSend from './sms-send.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -117,65 +116,6 @@ async function handleOwnerCommand(sms) {
     return;
   }
 
-  // Direct SMS shorthand — "text [name/number] [message]"
-  if (lower.startsWith('text ') || lower.startsWith('sms ') || lower.startsWith('message ')) {
-    const words = text.split(' ');
-    const target = words[1];
-    const msgBody = words.slice(2).join(' ');
-
-    if (!target || !msgBody) {
-      reply('Format: "text [name or number] [message]"');
-      return;
-    }
-
-    let toNumber = null;
-    let toName = target;
-
-    if (/^[\d\+\-\(\)]{7,}$/.test(target)) {
-      toNumber = target;
-    } else {
-      const allMatches = contacts.findAllByName(target);
-      const exactMatch = contacts.findContact(target) ||
-                         contacts.findByRelationship(target);
-
-      if (exactMatch) {
-        toNumber = exactMatch.phones?.[0];
-        toName = exactMatch.name || target;
-      } else if (allMatches.length === 1) {
-        toNumber = allMatches[0].phones?.[0];
-        toName = allMatches[0].name || target;
-      } else if (allMatches.length > 1) {
-        const names = allMatches
-          .map((c, i) => (i + 1) + '. ' + (c.name || c.phones?.[0]))
-          .join('\n');
-        reply('Found ' + allMatches.length + ' contacts named "' + target + '":\n\n' + names + '\n\nWhich one? Say "text [full name] [message]"');
-        return;
-      }
-    }
-
-    if (!toNumber) {
-      reply('I could not find a number for "' + target + '". Do you want to add them? Say "add contact ' + target + ' number [phone number]"');
-      return;
-    }
-
-    let finalMessage = msgBody;
-    try {
-      const ownerName = getAigentikName();
-      const generated = await llama.chat([
-        { role: 'system', content: 'You are ' + name + ' sending a text message on behalf of ' + ownerName + '. Write a natural, friendly text message based on the instruction given. Keep it short and conversational. Reply with the message text only.' },
-        { role: 'user', content: 'Send this message to ' + toName + ': ' + msgBody }
-      ], 150);
-      finalMessage = generated;
-    } catch (e) {
-      log.warn('owner-command', 'AI message generation failed, sending raw', { error: e.message });
-    }
-
-    smsSend.sendSms(toNumber, finalMessage);
-    reply('✅ Text sent to ' + toName + ' (' + toNumber + '):\n"' + finalMessage + '"');
-    log.action('owner-command', 'SMS sent to ' + toName + ' via shorthand');
-    return;
-  }
-
   // Direct email shorthand — "email [name] about/re [topic]"
   if (lower.startsWith('email ') && (lower.includes(' about ') || lower.includes(' re '))) {
     const words = text.split(' ');
@@ -270,14 +210,14 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       pendingConfirmations.set('pending', {
         execute: async () => {
           try {
-            const result = await gmail.markAsSpam(['ALL']);
-            reply(`🚫 Done! Moved ${result.spam} promotional email(s) to spam.`);
+            const result = await gmail.spamMatchingEmails(emailRules.isPromotional);
+            reply(`🚫 Done! Scanned ${result.scanned} email(s), moved ${result.spam} promotional one(s) to spam.`);
           } catch (e) {
             reply(`❌ Failed: ${e.message}`);
           }
         }
       });
-      reply(`⚠️ Move all promotional emails to spam?\n\nReply "yes" to confirm or "no" to cancel.`);
+      reply(`⚠️ Scan the inbox and move promotional emails to spam?\n\nReply "yes" to confirm or "no" to cancel.`);
       break;
     }
 
@@ -307,8 +247,18 @@ async function executeInterpretedCommand(cmd, originalText, name) {
 
       if (item.type === 'email' && gmail) {
         await gmail.sendReply(item.sender, item.subject, item.draft_reply);
-      } else if (item.type === 'sms') {
-        smsSend.sendSms(item.sender, item.draft_reply);
+      } else if (item.type === 'sms' && gmail) {
+        if (!item.reply_to_email) {
+          reply(`❌ Item #${id} predates the current version and is missing the info needed to reply. Say "skip ${id}" to dismiss it.`);
+          break;
+        }
+        // Google Voice texts arrive as a forwarded email; reply via that same
+        // email (Google Voice delivers it as a text) rather than sending SMS
+        // directly, so this stays consistent with the auto-reply path.
+        await gmail.replyToGoogleVoiceText(
+          { reply_to_email: item.reply_to_email, original_subject: item.original_subject },
+          item.draft_reply
+        );
       }
       queue.removeItem(id);
       reply(`✅ Reply sent for item #${id}.\nTo: ${item.sender_name || item.sender}`);
@@ -431,25 +381,9 @@ Return ONLY JSON.`;
       break;
     }
 
-    case 'send_sms': {
-      let toNumber = null;
-      if (cmd.target) {
-        const contact = contacts.findContact(cmd.target) ||
-                        contacts.findByRelationship(cmd.target);
-        if (contact) toNumber = contact.phones?.[0];
-        else if (/[0-9]{10}/.test(cmd.target)) toNumber = cmd.target;
-      }
-
-      if (!toNumber) {
-        reply(`I need a phone number for "${cmd.target}". Do you have one saved?`);
-        break;
-      }
-
-      const content = cmd.content || await llama.generateContent(cmd.content, 'sms', '');
-      smsSend.sendSms(toNumber, content);
-      reply(`✅ SMS sent to ${cmd.target} (${toNumber})`);
+    case 'send_sms':
+      reply(`I can't start a new text out of the blue — Aigentik only replies to Google Voice texts you've already received (via email), it can't send unprompted SMS. Reply to a pending item instead, or use "email [name] about ..." to reach them by email.`);
       break;
-    }
 
     case 'pause_all':
       config.behavior.paused = true;

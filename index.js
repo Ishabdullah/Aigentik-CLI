@@ -44,7 +44,11 @@ function isLlamaRunning() {
   } catch (e) { return false; }
 }
 
-function startLlamaServer() {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function startLlamaServer() {
   if (isLlamaRunning()) {
     log.info('index', 'llama-server already running');
     return true;
@@ -60,7 +64,7 @@ function startLlamaServer() {
       ' --host 0.0.0.0 --port 8080 -np 1 --log-disable';
     execSync(cmd + ' &', { stdio: 'ignore' });
     for (let i = 0; i < 30; i++) {
-      execSync('sleep 1');
+      await sleep(1000);
       if (isLlamaRunning()) {
         log.info('index', 'llama-server started');
         return true;
@@ -171,7 +175,9 @@ async function handleGoogleVoiceText(email) {
         senderName: voiceMsg.sender_name,
         body: voiceMsg.body,
         draftReply: reply,
-        contactId: contact?.id
+        contactId: contact?.id,
+        replyToEmail: voiceMsg.reply_to_email,
+        originalSubject: voiceMsg.original_subject
       });
       await gmail.sendOwnerNotification(
         '💬 New text #' + item.display_id + ' from ' +
@@ -280,7 +286,7 @@ async function main() {
   loadProfile();
 
   // Start llama-server
-  const llamaOk = startLlamaServer();
+  const llamaOk = await startLlamaServer();
   if (!llamaOk) {
     log.error('index', 'Cannot start without llama-server');
     process.exit(1);
