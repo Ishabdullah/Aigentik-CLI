@@ -28,6 +28,12 @@ class EmailProvider {
     this.onNewMailCallback = null;
     this.startupTime = new Date();
 
+    // Guards against overlapping handleNewMail() runs: if two 'exists' events
+    // fire close together, a second run is deferred (not started concurrently)
+    // until the first finishes, then re-checked once more.
+    this.isHandlingNewMail = false;
+    this.newMailRecheckPending = false;
+
     // SMTP transporter (singleton)
     this.smtpTransporter = null;
 
@@ -199,9 +205,7 @@ class EmailProvider {
     this.imapClient.on('exists', ({ count, prevCount }) => {
       this.logger.debug('email-provider', `Mailbox exists update: ${count} messages`);
       if (count > prevCount) {
-        this.handleNewMail().catch((error) => {
-          this.logger.error('email-provider', 'Failed to handle new mail from exists event', { error: error.message });
-        });
+        this.triggerHandleNewMail();
       }
     });
 
@@ -263,6 +267,30 @@ class EmailProvider {
         }
       }
     }
+  }
+
+  /**
+   * Trigger handleNewMail(), but never run it concurrently with itself. If an
+   * 'exists' event fires while a run is already in progress, defer instead of
+   * starting a second overlapping search+fetch over the same connection.
+   */
+  triggerHandleNewMail() {
+    if (this.isHandlingNewMail) {
+      this.newMailRecheckPending = true;
+      return;
+    }
+    this.isHandlingNewMail = true;
+    this.handleNewMail()
+      .catch((error) => {
+        this.logger.error('email-provider', 'Failed to handle new mail from exists event', { error: error.message });
+      })
+      .finally(() => {
+        this.isHandlingNewMail = false;
+        if (this.newMailRecheckPending) {
+          this.newMailRecheckPending = false;
+          this.triggerHandleNewMail();
+        }
+      });
   }
 
   /**

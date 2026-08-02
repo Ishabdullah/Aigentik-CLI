@@ -185,7 +185,11 @@ function addHistory(identifier, historyEntry) {
 function processEntities(entities, source) {
   if (!entities) return;
 
-  const { names, phones, emails, businesses, relationships } = entities;
+  const names = entities.names || [];
+  const phones = entities.phones || [];
+  const emails = entities.emails || [];
+  const businesses = entities.businesses || [];
+  const relationships = entities.relationships || [];
 
   phones.forEach((phone, i) => {
     let contact = findContact(phone);

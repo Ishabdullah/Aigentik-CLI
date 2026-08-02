@@ -21,9 +21,6 @@ import * as queue from './queue.js';
 import * as tone from './tone.js';
 import * as smsRules from './sms-rules.js';
 import * as emailRules from './email-rules.js';
-import * as smsInbox from './sms-inbox.js';
-import * as smsPublic from './sms-public.js';
-import * as smsSend from './sms-send.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -226,7 +223,7 @@ async function handleNewEmail(email) {
   const agentName = config.aigentik_name || 'Aigentik';
 
   if (action === 'spam') {
-    await gmail.markAsSpam([['FROM', email.from_email]]);
+    await gmail.markAsSpam({ from: email.from_email });
     log.action('index', 'Email marked spam from ' + email.from_email);
     return;
   }
@@ -271,9 +268,9 @@ async function handleNewEmail(email) {
 }
 
 // Graceful shutdown
-function shutdown(signal) {
+async function shutdown(signal) {
   log.info('index', signal + ' received — shutting down Aigentik');
-  gmail.disconnect();
+  await gmail.disconnect();
   process.exit(0);
 }
 

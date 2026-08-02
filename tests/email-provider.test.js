@@ -172,6 +172,30 @@ describe('EmailProvider new mail handling', () => {
     expect(provider.handleNewMail).not.toHaveBeenCalled();
   });
 
+  it('does not run handleNewMail concurrently with itself, but rechecks once after finishing', async () => {
+    let resolveFirst;
+    let callCount = 0;
+    provider.handleNewMail = jest.fn(() => {
+      callCount++;
+      if (callCount === 1) {
+        return new Promise((resolve) => { resolveFirst = resolve; });
+      }
+      return Promise.resolve();
+    });
+
+    provider.triggerHandleNewMail();
+    provider.triggerHandleNewMail();
+    provider.triggerHandleNewMail();
+
+    expect(provider.handleNewMail).toHaveBeenCalledTimes(1);
+
+    resolveFirst();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(provider.handleNewMail).toHaveBeenCalledTimes(2);
+  });
+
   it('handleNewMail iterates the async-generator fetch result and processes each message', async () => {
     provider.startupTime = new Date('2020-01-01T00:00:00Z');
     provider.onNewMailCallback = jest.fn().mockResolvedValue();

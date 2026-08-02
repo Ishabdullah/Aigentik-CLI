@@ -240,7 +240,7 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       pendingConfirmations.set('pending', {
         execute: async () => {
           try {
-            const result = await gmail.deleteEmails(['ALL']);
+            const result = await gmail.deleteEmails({ all: true });
             reply(`🗑 Done! Deleted ${result.deleted} email(s) from inbox.`);
           } catch (e) {
             reply(`❌ Failed to delete emails: ${e.message}`);
@@ -255,7 +255,7 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       pendingConfirmations.set('pending', {
         execute: async () => {
           try {
-            const result = await gmail.archiveEmails(['ALL']);
+            const result = await gmail.archiveEmails({ all: true });
             reply(`📦 Done! Archived ${result.archived} email(s).`);
           } catch (e) {
             reply(`❌ Failed to archive: ${e.message}`);
@@ -285,7 +285,7 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       pendingConfirmations.set('pending', {
         execute: async () => {
           try {
-            const result = await gmail.archiveEmails(['ALL']);
+            const result = await gmail.archiveEmails({ all: true });
             reply(`✅ Inbox cleaned! Archived ${result.archived} email(s). Your inbox is now empty.`);
           } catch (e) {
             reply(`❌ Failed to clean inbox: ${e.message}`);
@@ -345,6 +345,9 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       const item = queue.getItem(id);
       if (!item) { reply(`Item #${id} not found.`); break; }
       if (item.type === 'email' && gmail) {
+        // NOTE: queue items don't store a message UID, only sender/subject, so
+        // this can only target "all mail from this sender" rather than the one
+        // queued message. Left as-is pending a decision — see review notes.
         await gmail.markAsSpam(item.sender);
       }
       queue.removeItem(id);
