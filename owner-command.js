@@ -502,6 +502,92 @@ Return ONLY JSON.`;
       break;
     }
 
+    case 'add_contact': {
+      const targetName = cmd.target;
+      if (!targetName) { reply('What\'s the contact\'s name?'); break; }
+
+      const existing = contacts.findContact(targetName);
+      const field = cmd.contact_field;
+      const value = cmd.contact_value;
+
+      if (existing) {
+        if (field === 'phone') contacts.updateContact(existing.id, { phones: value });
+        else if (field === 'email') contacts.updateContact(existing.id, { emails: value });
+        else if (field === 'relationship') contacts.updateContact(existing.id, { relationship: value });
+        reply(`✅ Updated ${existing.name || targetName}.`);
+      } else {
+        const c = contacts.createContact({
+          name: targetName,
+          phones: field === 'phone' ? value : null,
+          emails: field === 'email' ? value : null,
+          relationship: field === 'relationship' ? value : null,
+          type: 'person',
+          source: 'owner'
+        });
+        reply(`✅ Added ${c.name} to contacts.`);
+      }
+      log.action('owner-command', `add_contact: ${targetName}`);
+      break;
+    }
+
+    case 'update_contact': {
+      const targetName = cmd.target;
+      if (!targetName) { reply('Which contact?'); break; }
+
+      const contact = contacts.findContact(targetName) || contacts.findByRelationship(targetName);
+      if (!contact) {
+        reply(`Contact "${targetName}" not found. Say "add contact ${targetName}" first.`);
+        break;
+      }
+
+      const field = cmd.contact_field;
+      const value = cmd.contact_value;
+      if (!field || !value) {
+        reply('What should I change? Example: "save email john@x.com to Mike" or "change Mike\'s name to Michael"');
+        break;
+      }
+
+      if (field === 'name') {
+        contacts.renameContact(contact.id, value);
+        reply(`✅ Renamed ${contact.name || targetName} to ${value}.`);
+      } else if (field === 'phone') {
+        contacts.updateContact(contact.id, { phones: value });
+        reply(`✅ Added phone ${value} to ${contact.name || targetName}.`);
+      } else if (field === 'email') {
+        contacts.updateContact(contact.id, { emails: value });
+        reply(`✅ Added email ${value} to ${contact.name || targetName}.`);
+      } else if (field === 'relationship') {
+        contacts.updateContact(contact.id, { relationship: value });
+        reply(`✅ Set ${contact.name || targetName}'s relationship to ${value}.`);
+      } else if (field === 'notes') {
+        contacts.updateContact(contact.id, { notes: value });
+        reply(`✅ Updated notes for ${contact.name || targetName}.`);
+      } else {
+        reply(`I don't know how to update "${field}".`);
+        break;
+      }
+      log.action('owner-command', `update_contact: ${targetName} (${field})`);
+      break;
+    }
+
+    case 'delete_contact': {
+      const targetName = cmd.target;
+      if (!targetName) { reply('Which contact should I delete?'); break; }
+
+      const contact = contacts.findContact(targetName) || contacts.findByRelationship(targetName);
+      if (!contact) { reply(`Contact "${targetName}" not found.`); break; }
+
+      pendingConfirmations.set('pending', {
+        execute: async () => {
+          contacts.deleteContact(contact.id);
+          reply(`🗑️ Deleted ${contact.name || targetName} from contacts.`);
+          log.action('owner-command', `Deleted contact: ${targetName}`);
+        }
+      });
+      reply(`⚠️ Delete contact "${contact.name || targetName}"? This cannot be undone.\n\nReply "yes" to confirm or "no" to cancel.`);
+      break;
+    }
+
     case 'find_contact': {
       const searchTerm = cmd.target;
       if (!searchTerm) { reply('Who are you looking for?'); break; }

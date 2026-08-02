@@ -158,6 +158,28 @@ function updateContact(id, updates) {
   return contact;
 }
 
+// Delete a contact entirely
+function deleteContact(identifier) {
+  const contacts = loadContacts();
+  const contact = findContact(identifier) || findByRelationship(identifier);
+  if (!contact) return false;
+  saveContacts(contacts.filter(c => c.id !== contact.id));
+  log.info('contacts', `Contact deleted: ${contact.name || contact.id}`, { id: contact.id });
+  return true;
+}
+
+// Explicitly overwrite a contact's name (updateContact only fills in a missing name)
+function renameContact(identifier, newName) {
+  const contacts = loadContacts();
+  const contact = findContact(identifier) || findByRelationship(identifier);
+  if (!contact) return null;
+  const idx = contacts.findIndex(c => c.id === contact.id);
+  contacts[idx].name = newName;
+  saveContacts(contacts);
+  log.info('contacts', `Contact renamed to ${newName}`, { id: contact.id });
+  return contacts[idx];
+}
+
 // Add a history entry to a contact
 function addHistory(identifier, historyEntry) {
   const contact = findContact(identifier);
@@ -333,6 +355,8 @@ export {
   findAllByName,
   createContact,
   updateContact,
+  deleteContact,
+  renameContact,
   addHistory,
   processEntities,
   formatContact,
