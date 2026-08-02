@@ -6,7 +6,7 @@
 // Public: anyone texts 5559876543 (Google Voice)
 // All routing via Gmail IMAP IDLE
 
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -67,6 +67,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Set only if THIS process actually launched llama-server — if one was
+// already running (isLlamaRunning() below), we leave it alone and won't
+// kill it on shutdown either, since we didn't start it.
+let llamaProcess = null;
+
 async function startLlamaServer() {
   if (isLlamaRunning()) {
     log.info('index', 'llama-server already running');
@@ -76,16 +81,23 @@ async function startLlamaServer() {
   try {
     // Expand tilde in model path
     const modelPath = config.llama.model_path.replace(/^~/, process.env.HOME || '/data/data/com.termux/files/home');
-    const cmd = config.llama.llama_server_path +
-      ' -m "' + modelPath + '"' +
-      ' -t ' + config.llama.threads +
-      ' -c ' + config.llama.context_size +
-      ' --host 0.0.0.0 --port 8080 -np 1 --log-disable';
-    execSync(cmd + ' &', { stdio: 'ignore' });
+    llamaProcess = spawn(config.llama.llama_server_path, [
+      '-m', modelPath,
+      '-t', String(config.llama.threads),
+      '-c', String(config.llama.context_size),
+      '--host', '0.0.0.0',
+      '--port', '8080',
+      '-np', '1',
+      '--log-disable'
+    ], { stdio: 'ignore', detached: true });
+    llamaProcess.unref();
+    llamaProcess.on('error', (e) => {
+      log.error('index', 'llama-server process error', { error: e.message });
+    });
     for (let i = 0; i < 30; i++) {
       await sleep(1000);
       if (isLlamaRunning()) {
-        log.info('index', 'llama-server started');
+        log.info('index', 'llama-server started', { pid: llamaProcess.pid });
         return true;
       }
     }
@@ -94,6 +106,17 @@ async function startLlamaServer() {
   } catch (e) {
     log.error('index', 'Failed to start llama-server', { error: e.message });
     return false;
+  }
+}
+
+// Stop the llama-server process this Aigentik instance started, if any.
+function stopLlamaServer() {
+  if (!llamaProcess || llamaProcess.killed || llamaProcess.pid == null) return;
+  log.info('index', 'Stopping llama-server', { pid: llamaProcess.pid });
+  try {
+    process.kill(llamaProcess.pid, 'SIGTERM');
+  } catch (e) {
+    log.warn('index', 'Failed to stop llama-server', { error: e.message });
   }
 }
 
@@ -468,6 +491,7 @@ async function handleNewEmail(email) {
 async function shutdown(signal) {
   log.info('index', signal + ' received — shutting down Aigentik');
   await gmail.disconnect();
+  stopLlamaServer();
   process.exit(0);
 }
 
