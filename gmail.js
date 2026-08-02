@@ -91,6 +91,22 @@ async function sendOwnerNotification(message) {
   return provider.sendOwnerNotification(message);
 }
 
+/**
+ * Send a calendar invite (.ics, METHOD:REQUEST) for an appointment
+ */
+async function sendCalendarInvite(appointment, toEmail, bodyText) {
+  const provider = getProvider();
+  return provider.sendCalendarInvite(appointment, toEmail, bodyText);
+}
+
+/**
+ * Send a calendar cancellation (.ics, METHOD:CANCEL) for an appointment
+ */
+async function sendCalendarCancellation(appointment, toEmail, bodyText) {
+  const provider = getProvider();
+  return provider.sendCalendarCancellation(appointment, toEmail, bodyText);
+}
+
 // ─── EMAIL MANAGEMENT ─────────────────────────────────────────────────────────
 
 /**
@@ -206,6 +222,8 @@ export {
   sendReply,
   sendEmail,
   sendOwnerNotification,
+  sendCalendarInvite,
+  sendCalendarCancellation,
   deleteEmails,
   archiveEmails,
   markAsSpam,
@@ -227,6 +245,8 @@ export default {
   sendReply,
   sendEmail,
   sendOwnerNotification,
+  sendCalendarInvite,
+  sendCalendarCancellation,
   deleteEmails,
   archiveEmails,
   markAsSpam,

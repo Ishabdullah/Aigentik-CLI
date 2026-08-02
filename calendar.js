@@ -1,0 +1,415 @@
+// calendar.js — Aigentik self-hosted appointment calendar
+// No external calendar API/OAuth — Aigentik is the source of truth for
+// appointments, pushed to real calendars via .ics invite emails
+// (see email-provider.js). Same load/save-flat-file pattern as contacts.js.
+
+import fs from 'fs';
+import path from 'path';
+import * as chrono from 'chrono-node';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
+
+const CALENDAR_FILE = path.join(config.paths.data_dir, 'calendar.json');
+const SCHEDULE_CONFIG_FILE = path.join(config.paths.data_dir, 'schedule-config.json');
+
+const DEFAULT_SCHEDULE_CONFIG = {
+  working_hours: {
+    mon: { start: '09:00', end: '17:00' },
+    tue: { start: '09:00', end: '17:00' },
+    wed: { start: '09:00', end: '17:00' },
+    thu: { start: '09:00', end: '17:00' },
+    fri: { start: '09:00', end: '17:00' },
+    sat: null,
+    sun: null
+  },
+  default_duration_minutes: 30,
+  buffer_minutes: 15,
+  booking_window_days: 365,
+  duration_by_relationship: {}
+};
+
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+// ─── Storage ────────────────────────────────────────────────────────────────
+
+function loadCalendar() {
+  try {
+    if (fs.existsSync(CALENDAR_FILE)) {
+      return JSON.parse(fs.readFileSync(CALENDAR_FILE, 'utf8'));
+    }
+  } catch (e) {
+    log.warn('calendar', 'Could not load calendar file', { error: e.message });
+  }
+  return [];
+}
+
+function saveCalendar(appointments) {
+  try {
+    fs.writeFileSync(CALENDAR_FILE, JSON.stringify(appointments, null, 2));
+  } catch (e) {
+    log.error('calendar', 'Failed to save calendar', { error: e.message });
+  }
+}
+
+function loadScheduleConfig() {
+  try {
+    if (fs.existsSync(SCHEDULE_CONFIG_FILE)) {
+      return { ...DEFAULT_SCHEDULE_CONFIG, ...JSON.parse(fs.readFileSync(SCHEDULE_CONFIG_FILE, 'utf8')) };
+    }
+  } catch (e) {
+    log.warn('calendar', 'Could not load schedule config, using defaults', { error: e.message });
+  }
+  return { ...DEFAULT_SCHEDULE_CONFIG };
+}
+
+function saveScheduleConfig(scheduleConfig) {
+  try {
+    fs.writeFileSync(SCHEDULE_CONFIG_FILE, JSON.stringify(scheduleConfig, null, 2));
+  } catch (e) {
+    log.error('calendar', 'Failed to save schedule config', { error: e.message });
+  }
+}
+
+function generateAppointmentId(appointments) {
+  const maxId = appointments.reduce((max, a) => {
+    const num = parseInt(a.id.replace('appt_', ''));
+    return num > max ? num : max;
+  }, 0);
+  return `appt_${String(maxId + 1).padStart(4, '0')}`;
+}
+
+// ─── Working hours / duration rules ────────────────────────────────────────
+
+function getDurationForRelationship(relationship) {
+  const scheduleConfig = loadScheduleConfig();
+  if (relationship) {
+    const rel = relationship.toLowerCase().trim();
+    if (scheduleConfig.duration_by_relationship?.[rel]) {
+      return scheduleConfig.duration_by_relationship[rel];
+    }
+  }
+  return scheduleConfig.default_duration_minutes;
+}
+
+function setWorkingHours(days, start, end) {
+  const scheduleConfig = loadScheduleConfig();
+  days.forEach(day => {
+    const key = day.toLowerCase().slice(0, 3);
+    if (DAY_KEYS.includes(key)) {
+      scheduleConfig.working_hours[key] = { start, end };
+    }
+  });
+  saveScheduleConfig(scheduleConfig);
+  log.info('calendar', 'Working hours updated', { days, start, end });
+  return scheduleConfig.working_hours;
+}
+
+function setDayOff(days) {
+  const scheduleConfig = loadScheduleConfig();
+  days.forEach(day => {
+    const key = day.toLowerCase().slice(0, 3);
+    if (DAY_KEYS.includes(key)) {
+      scheduleConfig.working_hours[key] = null;
+    }
+  });
+  saveScheduleConfig(scheduleConfig);
+  return scheduleConfig.working_hours;
+}
+
+function setDurationForRelationship(relationship, minutes) {
+  const scheduleConfig = loadScheduleConfig();
+  scheduleConfig.duration_by_relationship[relationship.toLowerCase().trim()] = minutes;
+  saveScheduleConfig(scheduleConfig);
+  log.info('calendar', `Appointment duration set for ${relationship}: ${minutes}min`);
+  return scheduleConfig;
+}
+
+function formatWorkingHours() {
+  const scheduleConfig = loadScheduleConfig();
+  const lines = DAY_KEYS.filter(k => k !== 'sun' || true).map(key => {
+    const label = { sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat' }[key];
+    const hours = scheduleConfig.working_hours[key];
+    return `${label}: ${hours ? `${hours.start}-${hours.end}` : 'off'}`;
+  });
+  return lines.join(', ');
+}
+
+// ─── Natural-language phrase parsing (deterministic, no LLM date math) ────
+
+// Turn a raw phrase like "next tuesday at 2pm" into a concrete Date, anchored
+// to now. Returns null if chrono can't find a date in it.
+function parseDatetimePhrase(phrase, anchorDate) {
+  if (!phrase) return null;
+  const result = chrono.parseDate(phrase, anchorDate ? new Date(anchorDate) : new Date());
+  return result || null;
+}
+
+const DAY_NAME_TO_KEY = {
+  sunday: 'sun', sun: 'sun', monday: 'mon', mon: 'mon', tuesday: 'tue', tue: 'tue', tues: 'tue',
+  wednesday: 'wed', wed: 'wed', thursday: 'thu', thu: 'thu', thurs: 'thu',
+  friday: 'fri', fri: 'fri', saturday: 'sat', sat: 'sat'
+};
+const DAY_ORDER = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+// Turn a phrase like "9am to 5pm monday through friday" into
+// { days: ['mon','tue',...], start: 'HH:MM', end: 'HH:MM' }, or null if it
+// can't be parsed. Handled deterministically (not by the LLM) since it's a
+// well-bounded extraction task and the failure mode of a wrong config is bad.
+function parseWorkingHoursPhrase(phrase) {
+  if (!phrase) return null;
+  const lower = phrase.toLowerCase();
+
+  const timeRangeMatch = lower.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:to|-|through|until)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  if (!timeRangeMatch) return null;
+
+  const to24h = (h, m, meridiem, fallbackMeridiem) => {
+    let hour = parseInt(h, 10);
+    const min = m ? parseInt(m, 10) : 0;
+    const mer = meridiem || fallbackMeridiem;
+    if (mer === 'pm' && hour < 12) hour += 12;
+    if (mer === 'am' && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+  };
+
+  // If only one side specifies am/pm, assume the same for the other unless
+  // the times suggest otherwise (e.g. "9 to 5" -> 9am to 5pm, business hours)
+  const [, sh, sm, sMer, eh, em, eMer] = timeRangeMatch;
+  const startMeridiem = sMer || (parseInt(sh, 10) < 12 ? 'am' : 'pm');
+  const endMeridiem = eMer || sMer || 'pm';
+
+  const start = to24h(sh, sm, sMer, startMeridiem);
+  const end = to24h(eh, em, eMer, endMeridiem);
+
+  let days = [];
+  if (/weekday/.test(lower)) {
+    days = ['mon', 'tue', 'wed', 'thu', 'fri'];
+  } else if (/weekend/.test(lower)) {
+    days = ['sat', 'sun'];
+  } else {
+    const dayNamesPattern = Object.keys(DAY_NAME_TO_KEY).sort((a, b) => b.length - a.length).join('|');
+    const dayRangeRegex = new RegExp(`\\b(${dayNamesPattern})\\b\\s*(?:through|to|-)\\s*\\b(${dayNamesPattern})\\b`);
+    const rangeMatch = lower.match(dayRangeRegex);
+    if (rangeMatch && DAY_NAME_TO_KEY[rangeMatch[1]] && DAY_NAME_TO_KEY[rangeMatch[2]]) {
+      const startIdx = DAY_ORDER.indexOf(DAY_NAME_TO_KEY[rangeMatch[1]]);
+      const endIdx = DAY_ORDER.indexOf(DAY_NAME_TO_KEY[rangeMatch[2]]);
+      for (let i = startIdx; ; i = (i + 1) % 7) {
+        days.push(DAY_ORDER[i]);
+        if (i === endIdx) break;
+      }
+    } else {
+      days = Object.keys(DAY_NAME_TO_KEY)
+        .filter(name => lower.includes(name))
+        .map(name => DAY_NAME_TO_KEY[name]);
+      days = [...new Set(days)];
+    }
+  }
+
+  if (days.length === 0) return null;
+  return { days, start, end };
+}
+
+// ─── Slot finding ───────────────────────────────────────────────────────────
+
+// Check whether [start, end) fits inside that day's working hours
+function fitsWorkingHours(start, end, dayHours) {
+  if (!dayHours) return false;
+  const dayStart = new Date(start);
+  const [sh, sm] = dayHours.start.split(':').map(Number);
+  dayStart.setHours(sh, sm, 0, 0);
+  const dayEnd = new Date(start);
+  const [eh, em] = dayHours.end.split(':').map(Number);
+  dayEnd.setHours(eh, em, 0, 0);
+  return start >= dayStart && end <= dayEnd;
+}
+
+// Check whether [start, end) conflicts with any existing confirmed appointment,
+// honoring the buffer on both sides
+function hasConflict(start, end, appointments, bufferMinutes, excludeId) {
+  const bufferMs = bufferMinutes * 60 * 1000;
+  return appointments.some(a => {
+    if (a.status !== 'confirmed') return false;
+    if (excludeId && a.id === excludeId) return false;
+    const aStart = new Date(a.start).getTime() - bufferMs;
+    const aEnd = new Date(a.end).getTime() + bufferMs;
+    return start.getTime() < aEnd && end.getTime() > aStart;
+  });
+}
+
+// Is [start, end) a valid, open slot right now?
+function isSlotAvailable(start, end, scheduleConfig, appointments, excludeId) {
+  const dayKey = DAY_KEYS[start.getDay()];
+  const dayHours = scheduleConfig.working_hours[dayKey];
+  if (!fitsWorkingHours(start, end, dayHours)) return false;
+  if (hasConflict(start, end, appointments, scheduleConfig.buffer_minutes, excludeId)) return false;
+  return true;
+}
+
+// Find the next available slot, honoring working hours + existing bookings.
+// If preferredDate is given and free, it's used as-is; otherwise this walks
+// forward from afterDate (or preferredDate, if later) day by day, checking
+// every slot_duration-aligned start time within working hours, up to
+// booking_window_days out.
+function findNextAvailableSlot({ afterDate, durationMinutes, preferredDate, excludeId } = {}) {
+  const scheduleConfig = loadScheduleConfig();
+  const appointments = loadCalendar();
+  const duration = durationMinutes || scheduleConfig.default_duration_minutes;
+  const now = afterDate ? new Date(afterDate) : new Date();
+
+  if (preferredDate) {
+    const start = new Date(preferredDate);
+    const end = new Date(start.getTime() + duration * 60 * 1000);
+    if (start > now && isSlotAvailable(start, end, scheduleConfig, appointments, excludeId)) {
+      return { start, end };
+    }
+  }
+
+  // Walk forward from the later of now/preferredDate, in 15-minute increments,
+  // within each day's working hours, until we find an open slot.
+  const searchStart = preferredDate && new Date(preferredDate) > now ? new Date(preferredDate) : now;
+  const windowEnd = new Date(now.getTime() + scheduleConfig.booking_window_days * 24 * 60 * 60 * 1000);
+
+  for (let dayOffset = 0; dayOffset < scheduleConfig.booking_window_days; dayOffset++) {
+    const day = new Date(searchStart);
+    day.setDate(day.getDate() + dayOffset);
+    const dayKey = DAY_KEYS[day.getDay()];
+    const dayHours = scheduleConfig.working_hours[dayKey];
+    if (!dayHours) continue;
+
+    const [sh, sm] = dayHours.start.split(':').map(Number);
+    const [eh, em] = dayHours.end.split(':').map(Number);
+    const dayStart = new Date(day);
+    dayStart.setHours(sh, sm, 0, 0);
+    const dayEnd = new Date(day);
+    dayEnd.setHours(eh, em, 0, 0);
+
+    let slotStart = new Date(dayOffset === 0 && searchStart > dayStart ? searchStart : dayStart);
+    // Round up to the next 15-minute mark
+    slotStart.setMinutes(Math.ceil(slotStart.getMinutes() / 15) * 15, 0, 0);
+
+    while (slotStart.getTime() + duration * 60 * 1000 <= dayEnd.getTime()) {
+      const slotEnd = new Date(slotStart.getTime() + duration * 60 * 1000);
+      if (slotStart > windowEnd) return null;
+      if (isSlotAvailable(slotStart, slotEnd, scheduleConfig, appointments, excludeId)) {
+        return { start: slotStart, end: slotEnd };
+      }
+      slotStart = new Date(slotStart.getTime() + 15 * 60 * 1000);
+    }
+  }
+
+  return null; // fully booked for the entire window — extremely unlikely
+}
+
+// ─── Appointments ───────────────────────────────────────────────────────────
+
+function createAppointment({ title, start, end, contactId, attendeeName, attendeeEmail, createdVia, notes }) {
+  const appointments = loadCalendar();
+  const id = generateAppointmentId(appointments);
+
+  const appointment = {
+    id,
+    uid: `${id}@aigentik.local`,
+    ics_sequence: 0,
+    title: title || `Appointment with ${attendeeName || attendeeEmail || 'contact'}`,
+    start: new Date(start).toISOString(),
+    end: new Date(end).toISOString(),
+    contact_id: contactId || null,
+    attendee_name: attendeeName || null,
+    attendee_email: attendeeEmail || null,
+    status: 'confirmed',
+    created_via: createdVia || 'owner',
+    notes: notes || null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    history: [{ event: 'created', at: new Date().toISOString() }]
+  };
+
+  appointments.push(appointment);
+  saveCalendar(appointments);
+  log.action('calendar', `Appointment created: ${appointment.title}`, { id, start: appointment.start });
+  return appointment;
+}
+
+function rescheduleAppointment(id, newStart, newEnd) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  const appt = appointments[idx];
+  const fromStart = appt.start;
+  appt.start = new Date(newStart).toISOString();
+  appt.end = new Date(newEnd).toISOString();
+  appt.ics_sequence = (appt.ics_sequence || 0) + 1;
+  appt.updated_at = new Date().toISOString();
+  appt.history.push({ event: 'rescheduled', at: appt.updated_at, from: fromStart, to: appt.start });
+
+  appointments[idx] = appt;
+  saveCalendar(appointments);
+  log.action('calendar', `Appointment rescheduled: ${appt.title}`, { id, from: fromStart, to: appt.start });
+  return appt;
+}
+
+function cancelAppointment(id) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].status = 'cancelled';
+  appointments[idx].updated_at = new Date().toISOString();
+  appointments[idx].history.push({ event: 'cancelled', at: appointments[idx].updated_at });
+
+  saveCalendar(appointments);
+  log.action('calendar', `Appointment cancelled: ${appointments[idx].title}`, { id });
+  return appointments[idx];
+}
+
+function getAppointment(id) {
+  return loadCalendar().find(a => a.id === id) || null;
+}
+
+function findAppointmentsByContact(contactId) {
+  if (!contactId) return [];
+  return loadCalendar().filter(a => a.contact_id === contactId && a.status === 'confirmed');
+}
+
+function findUpcoming(days = 30) {
+  const now = new Date();
+  const until = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
+  return loadCalendar()
+    .filter(a => a.status === 'confirmed' && new Date(a.start) >= now && new Date(a.start) <= until)
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+}
+
+function formatAppointment(appt) {
+  if (!appt) return 'Unknown appointment';
+  const start = new Date(appt.start);
+  return `${appt.title} — ${start.toLocaleString()} (${appt.attendee_name || appt.attendee_email || 'no contact'})`;
+}
+
+function listUpcomingForSms(days = 14) {
+  const upcoming = findUpcoming(days);
+  if (upcoming.length === 0) return `📅 No appointments in the next ${days} days.`;
+  const lines = [`📅 Upcoming appointments:\n`];
+  upcoming.forEach(a => lines.push(`#${a.id.replace('appt_', '')} ${formatAppointment(a)}`));
+  return lines.join('\n');
+}
+
+export {
+  loadCalendar,
+  loadScheduleConfig,
+  parseDatetimePhrase,
+  parseWorkingHoursPhrase,
+  getDurationForRelationship,
+  setWorkingHours,
+  setDayOff,
+  setDurationForRelationship,
+  formatWorkingHours,
+  findNextAvailableSlot,
+  createAppointment,
+  rescheduleAppointment,
+  cancelAppointment,
+  getAppointment,
+  findAppointmentsByContact,
+  findUpcoming,
+  formatAppointment,
+  listUpcomingForSms
+};

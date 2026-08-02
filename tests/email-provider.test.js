@@ -122,6 +122,49 @@ describe('EmailProvider', () => {
       expect(parsed.sender_phone).toBe('5559876543');
     });
   });
+
+  describe('Calendar invite building', () => {
+    const appointment = {
+      id: 'appt_0001',
+      uid: 'appt_0001@aigentik.local',
+      ics_sequence: 0,
+      title: 'Appointment with John Smith',
+      start: '2026-08-05T18:00:00.000Z',
+      end: '2026-08-05T18:30:00.000Z',
+      attendee_email: 'john@example.com'
+    };
+
+    it('builds a REQUEST VEVENT with the right UID, times, and attendee', () => {
+      const ics = provider.buildIcs(appointment, 'REQUEST');
+      expect(ics).toContain('METHOD:REQUEST');
+      expect(ics).toContain('UID:appt_0001@aigentik.local');
+      expect(ics).toContain('SEQUENCE:0');
+      expect(ics).toContain('DTSTART:20260805T180000Z');
+      expect(ics).toContain('DTEND:20260805T183000Z');
+      expect(ics).toContain('ATTENDEE:mailto:john@example.com');
+      expect(ics).toContain('ORGANIZER:mailto:test@gmail.com');
+      expect(ics).toContain('STATUS:CONFIRMED');
+    });
+
+    it('builds a CANCEL VEVENT with matching UID and CANCELLED status', () => {
+      const ics = provider.buildIcs(appointment, 'CANCEL');
+      expect(ics).toContain('METHOD:CANCEL');
+      expect(ics).toContain('UID:appt_0001@aigentik.local');
+      expect(ics).toContain('STATUS:CANCELLED');
+    });
+
+    it('bumps SEQUENCE on a rescheduled appointment', () => {
+      const rescheduled = { ...appointment, ics_sequence: 2 };
+      const ics = provider.buildIcs(rescheduled, 'REQUEST');
+      expect(ics).toContain('SEQUENCE:2');
+    });
+
+    it('falls back to the organizer address when no attendee email is set', () => {
+      const noAttendee = { ...appointment, attendee_email: null };
+      const ics = provider.buildIcs(noAttendee, 'REQUEST');
+      expect(ics).toContain('ATTENDEE:mailto:test@gmail.com');
+    });
+  });
 });
 
 describe('EmailProvider new mail handling', () => {

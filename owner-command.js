@@ -8,6 +8,7 @@ import * as llama from './llama.js';
 import * as queue from './queue.js';
 import * as emailRules from './email-rules.js';
 import * as contacts from './contacts.js';
+import * as calendarModule from './calendar.js';
 import fs from 'fs';
 import path from 'path';
 import * as contactsSync from './contacts-sync.js';
@@ -585,6 +586,127 @@ Return ONLY JSON.`;
         }
       });
       reply(`⚠️ Delete contact "${contact.name || targetName}"? This cannot be undone.\n\nReply "yes" to confirm or "no" to cancel.`);
+      break;
+    }
+
+    case 'schedule_appointment': {
+      const targetName = cmd.target;
+      if (!targetName) { reply('Who\'s this appointment for?'); break; }
+
+      const contact = contacts.findContact(targetName) || contacts.findByRelationship(targetName);
+      if (!contact) {
+        reply(`Contact "${targetName}" not found. Add them first with "add contact ${targetName}".`);
+        break;
+      }
+      if (!contact.emails?.length) {
+        reply(`I don't have an email on file for ${contact.name || targetName} to send the invite to. Say "save email x@y.com to ${targetName}" first.`);
+        break;
+      }
+
+      const preferredDate = calendarModule.parseDatetimePhrase(cmd.content);
+      const duration = calendarModule.getDurationForRelationship(contact.relationship);
+      const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate });
+      if (!slot) { reply('I couldn\'t find an open slot for that.'); break; }
+
+      const appt = calendarModule.createAppointment({
+        title: `Appointment with ${contact.name || targetName}`,
+        start: slot.start,
+        end: slot.end,
+        contactId: contact.id,
+        attendeeName: contact.name || targetName,
+        attendeeEmail: contact.emails[0],
+        createdVia: 'owner'
+      });
+
+      if (gmail) {
+        await gmail.sendCalendarInvite(appt, contact.emails[0]);
+        await gmail.sendCalendarInvite(appt, config.owner?.admin_email || config.gmail.email);
+      }
+      reply(`✅ Booked ${appt.title} for ${new Date(appt.start).toLocaleString()}. Invite sent to ${contact.emails[0]}.`);
+      log.action('owner-command', `schedule_appointment: ${targetName} @ ${appt.start}`);
+      break;
+    }
+
+    case 'reschedule_appointment': {
+      const targetName = cmd.target;
+      if (!targetName) { reply('Whose appointment?'); break; }
+
+      const contact = contacts.findContact(targetName) || contacts.findByRelationship(targetName);
+      if (!contact) { reply(`Contact "${targetName}" not found.`); break; }
+
+      const appts = calendarModule.findAppointmentsByContact(contact.id);
+      if (appts.length === 0) { reply(`No appointment on file for ${contact.name || targetName}.`); break; }
+      const appt = appts.sort((a, b) => new Date(a.start) - new Date(b.start))[0];
+
+      const preferredDate = calendarModule.parseDatetimePhrase(cmd.content);
+      if (!preferredDate) { reply('What time should I move it to?'); break; }
+
+      const duration = (new Date(appt.end) - new Date(appt.start)) / 60000;
+      const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate, excludeId: appt.id });
+      if (!slot) { reply('That time isn\'t available and I couldn\'t find a nearby opening.'); break; }
+
+      const updated = calendarModule.rescheduleAppointment(appt.id, slot.start, slot.end);
+      if (gmail && updated.attendee_email) {
+        await gmail.sendCalendarInvite(updated, updated.attendee_email);
+        await gmail.sendCalendarInvite(updated, config.owner?.admin_email || config.gmail.email);
+      }
+      reply(`✅ Moved ${updated.title} to ${new Date(updated.start).toLocaleString()}.`);
+      log.action('owner-command', `reschedule_appointment: ${targetName} -> ${updated.start}`);
+      break;
+    }
+
+    case 'cancel_appointment': {
+      const targetName = cmd.target;
+      if (!targetName) { reply('Whose appointment should I cancel?'); break; }
+
+      const contact = contacts.findContact(targetName) || contacts.findByRelationship(targetName);
+      if (!contact) { reply(`Contact "${targetName}" not found.`); break; }
+
+      const appts = calendarModule.findAppointmentsByContact(contact.id);
+      if (appts.length === 0) { reply(`No appointment on file for ${contact.name || targetName}.`); break; }
+      const appt = appts.sort((a, b) => new Date(a.start) - new Date(b.start))[0];
+
+      pendingConfirmations.set('pending', {
+        execute: async () => {
+          calendarModule.cancelAppointment(appt.id);
+          if (gmail) {
+            if (appt.attendee_email) await gmail.sendCalendarCancellation(appt, appt.attendee_email);
+            await gmail.sendCalendarCancellation(appt, config.owner?.admin_email || config.gmail.email);
+          }
+          reply(`🚫 Cancelled ${appt.title} (was ${new Date(appt.start).toLocaleString()}).`);
+          log.action('owner-command', `Cancelled appointment for ${targetName}`);
+        }
+      });
+      reply(`⚠️ Cancel ${appt.title} on ${new Date(appt.start).toLocaleString()}?\n\nReply "yes" to confirm or "no" to cancel.`);
+      break;
+    }
+
+    case 'list_appointments':
+      reply(calendarModule.listUpcomingForSms());
+      break;
+
+    case 'set_working_hours': {
+      const parsed = calendarModule.parseWorkingHoursPhrase(cmd.content);
+      if (!parsed) {
+        reply('I couldn\'t parse that. Try: "set working hours 9am to 5pm monday through friday"');
+        break;
+      }
+      calendarModule.setWorkingHours(parsed.days, parsed.start, parsed.end);
+      reply(`✅ Working hours updated:\n${calendarModule.formatWorkingHours()}`);
+      log.action('owner-command', `Working hours set: ${JSON.stringify(parsed)}`);
+      break;
+    }
+
+    case 'set_appointment_duration': {
+      const relationship = cmd.rule_type;
+      const minutes = parseInt(cmd.content, 10);
+      if (!relationship || !minutes) {
+        reply('Tell me the role and the duration. Example: "lawyers get 60 minute appointments"');
+        break;
+      }
+      calendarModule.setDurationForRelationship(relationship, minutes);
+      reply(`✅ ${relationship} appointments are now ${minutes} minutes by default.`);
+      log.action('owner-command', `Duration set for ${relationship}: ${minutes}min`);
       break;
     }
 

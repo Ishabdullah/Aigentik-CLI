@@ -89,9 +89,9 @@ async function generateSmsReply(senderNumber, senderName, message, tone, relatio
 }
 
 async function interpretCommand(commandText, context) {
-  const actions = 'send_email, send_sms, list_pending, approve_reply, edit_reply, skip_item, spam_item, add_rule, remove_rule, list_rules, list_contacts, find_contact, add_contact, update_contact, delete_contact, set_contact_instructions, never_reply_to, always_reply_to, pause_all, pause_email, pause_sms, resume_all, resume_email, resume_sms, status, generate_content, delete_all_emails, archive_all_emails, spam_all_promotional, clean_inbox, sync_contacts, unknown';
+  const actions = 'send_email, send_sms, list_pending, approve_reply, edit_reply, skip_item, spam_item, add_rule, remove_rule, list_rules, list_contacts, find_contact, add_contact, update_contact, delete_contact, set_contact_instructions, never_reply_to, always_reply_to, pause_all, pause_email, pause_sms, resume_all, resume_email, resume_sms, status, generate_content, delete_all_emails, archive_all_emails, spam_all_promotional, clean_inbox, sync_contacts, schedule_appointment, reschedule_appointment, cancel_appointment, list_appointments, set_working_hours, set_appointment_duration, unknown';
   const schema = '{"action":"string","target":"string|null","content":"string|null","item_id":"number|null","rule_type":"string|null","rule_description":"string|null","contact_field":"string|null","contact_value":"string|null","confirm_required":false}';
-  const systemMsg = 'You interpret natural language commands for an AI assistant. Return ONLY valid JSON: ' + schema + ' Actions: ' + actions + ' contact_field is one of "name","phone","email","relationship","notes" and is used with add_contact/update_contact along with contact_value. Examples: "text mom I love her"={"action":"send_sms","target":"mom","content":"I love her"} "email boss about the meeting"={"action":"send_email","target":"boss","content":"the meeting"} "find Mike"={"action":"find_contact","target":"Mike"} "delete all emails"={"action":"delete_all_emails"} "pause"={"action":"pause_all"} "save email john@x.com to Mike"={"action":"update_contact","target":"Mike","contact_field":"email","contact_value":"john@x.com"} "change Mike\'s name to Michael"={"action":"update_contact","target":"Mike","contact_field":"name","contact_value":"Michael"} "add contact Sarah phone 5551234567"={"action":"add_contact","target":"Sarah","contact_field":"phone","contact_value":"5551234567"} "delete contact Sarah"={"action":"delete_contact","target":"Sarah"}';
+  const systemMsg = 'You interpret natural language commands for an AI assistant. Return ONLY valid JSON: ' + schema + ' Actions: ' + actions + ' contact_field is one of "name","phone","email","relationship","notes" and is used with add_contact/update_contact along with contact_value. For schedule_appointment/reschedule_appointment, target is the contact name and content is the natural-language date/time phrase verbatim (e.g. "next tuesday at 2pm"). For set_working_hours, content is the natural-language hours/days phrase verbatim (e.g. "9am to 5pm monday through friday"). For set_appointment_duration, rule_type is the relationship/role (e.g. "lawyer") and content is the duration in minutes as a string (e.g. "60"). Examples: "text mom I love her"={"action":"send_sms","target":"mom","content":"I love her"} "email boss about the meeting"={"action":"send_email","target":"boss","content":"the meeting"} "find Mike"={"action":"find_contact","target":"Mike"} "delete all emails"={"action":"delete_all_emails"} "pause"={"action":"pause_all"} "save email john@x.com to Mike"={"action":"update_contact","target":"Mike","contact_field":"email","contact_value":"john@x.com"} "change Mike\'s name to Michael"={"action":"update_contact","target":"Mike","contact_field":"name","contact_value":"Michael"} "add contact Sarah phone 5551234567"={"action":"add_contact","target":"Sarah","contact_field":"phone","contact_value":"5551234567"} "delete contact Sarah"={"action":"delete_contact","target":"Sarah"} "book John for next tuesday at 2pm"={"action":"schedule_appointment","target":"John","content":"next tuesday at 2pm"} "move John\'s appointment to friday 3pm"={"action":"reschedule_appointment","target":"John","content":"friday 3pm"} "cancel John\'s appointment"={"action":"cancel_appointment","target":"John"} "what\'s on my calendar this week"={"action":"list_appointments","content":"this week"} "set working hours 9 to 5 monday through friday"={"action":"set_working_hours","content":"9am to 5pm monday through friday"} "lawyers get 60 minute appointments"={"action":"set_appointment_duration","rule_type":"lawyer","content":"60"}';
   const userMsg = 'Command: "' + commandText + '"\nContext: ' + JSON.stringify(context || {});
   const messages = [
     { role: 'system', content: systemMsg },
@@ -104,6 +104,40 @@ async function interpretCommand(commandText, context) {
   } catch (e) {
     log.warn('llama', 'Failed to parse command JSON', { raw });
     return { action: 'unknown', target: null, content: commandText, confirm_required: false };
+  }
+}
+
+// Cheap keyword gate so ordinary messages don't trigger an extra LLM call —
+// only messages that plausibly mention scheduling get classified.
+const SCHEDULING_KEYWORDS = [
+  'appointment', 'schedule', 'scheduling', 'book', 'booking', 'reschedule',
+  'meeting', 'cancel', 'available', 'availability', 'time works', 'time work',
+  'come in', 'set up a time'
+];
+
+function mightBeSchedulingRelated(text) {
+  const lower = (text || '').toLowerCase();
+  return SCHEDULING_KEYWORDS.some(kw => lower.includes(kw));
+}
+
+// Classify whether an inbound message is a scheduling request, and extract
+// the raw natural-language time phrase — actual date math is done
+// deterministically downstream (chrono-node in index.js), since the local
+// model isn't reliable for exact date arithmetic.
+async function classifySchedulingIntent(text, context) {
+  const schema = '{"intent":"request_appointment|reschedule_appointment|cancel_appointment|none","raw_datetime_phrase":"string|null","duration_hint_minutes":"number|null"}';
+  const systemMsg = 'You classify whether a message is asking to book, move, or cancel an appointment. Return ONLY valid JSON: ' + schema + ' raw_datetime_phrase should be the exact phrase describing when, verbatim from the message (e.g. "next Tuesday at 2pm", "tomorrow afternoon"), or null if no time was mentioned. Examples: "can we set up an appointment for next tuesday at 2pm"={"intent":"request_appointment","raw_datetime_phrase":"next tuesday at 2pm","duration_hint_minutes":null} "I need to cancel my appointment"={"intent":"cancel_appointment","raw_datetime_phrase":null,"duration_hint_minutes":null} "can we move it to friday morning instead"={"intent":"reschedule_appointment","raw_datetime_phrase":"friday morning","duration_hint_minutes":null} "thanks, sounds good"={"intent":"none","raw_datetime_phrase":null,"duration_hint_minutes":null}';
+  const userMsg = 'Message: "' + text + '"\nContext: ' + JSON.stringify(context || {});
+  const messages = [
+    { role: 'system', content: systemMsg },
+    { role: 'user', content: userMsg }
+  ];
+  const raw = await chat(messages, 150);
+  try {
+    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+  } catch (e) {
+    log.warn('llama', 'Failed to parse scheduling intent JSON', { raw });
+    return { intent: 'none', raw_datetime_phrase: null, duration_hint_minutes: null };
   }
 }
 
@@ -153,4 +187,4 @@ async function warmUp() {
   }
 }
 
-export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, detectTone, generateContent, chat };
+export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, detectTone, generateContent, chat, classifySchedulingIntent, mightBeSchedulingRelated };

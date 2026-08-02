@@ -9,6 +9,7 @@
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.mjs --coverage"
   },
   "dependencies": {
+    "chrono-node": "^2.10.1",
     "imapflow": "^1.0.172",
     "mailparser": "^3.9.14",
     "nodemailer": "^9.0.3"

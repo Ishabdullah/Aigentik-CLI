@@ -21,6 +21,7 @@ import * as queue from './queue.js';
 import * as tone from './tone.js';
 import * as smsRules from './sms-rules.js';
 import * as emailRules from './email-rules.js';
+import * as calendarModule from './calendar.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -96,6 +97,114 @@ async function startLlamaServer() {
   }
 }
 
+// Check whether an inbound message (email or Google Voice text) from a
+// non-admin contact is a scheduling request, and if so, negotiate/book/
+// reschedule/cancel an appointment and reply — entirely via the .ics-over-
+// email mechanism, no calendar API/OAuth involved. Returns true if handled
+// (caller should skip its normal auto-reply/queue flow), false otherwise.
+async function handleSchedulingMessage({ text, contact, channel, target, subject, voiceMsg, senderLabel }) {
+  if (!llama.mightBeSchedulingRelated(text)) return false;
+
+  let classified;
+  try {
+    classified = await llama.classifySchedulingIntent(text, { current_time: new Date().toISOString() });
+  } catch (e) {
+    log.error('index', 'Failed to classify scheduling intent', { error: e.message });
+    return false;
+  }
+  if (!classified || classified.intent === 'none') return false;
+
+  const reply = async (msg) => {
+    if (channel === 'email') await gmail.sendReply(target, subject, msg);
+    else await gmail.replyToGoogleVoiceText(voiceMsg, msg);
+  };
+  const adminEmail = config.owner.admin_email || config.gmail.email;
+
+  if (classified.intent === 'request_appointment') {
+    const attendeeEmail = channel === 'email' ? target : (contact?.emails?.[0] || null);
+    if (!attendeeEmail) {
+      await reply("I'd love to get this on the calendar — what's a good email address to send the invite to?");
+      return true;
+    }
+
+    const preferredDate = calendarModule.parseDatetimePhrase(classified.raw_datetime_phrase);
+    const duration = classified.duration_hint_minutes || calendarModule.getDurationForRelationship(contact?.relationship);
+    const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate });
+
+    if (!slot) {
+      await reply("I'm not able to find an open slot right now — I'll have my owner reach out to schedule directly.");
+      await gmail.sendOwnerNotification(`⚠️ Could not find any available slot for a scheduling request from ${senderLabel}.`);
+      return true;
+    }
+
+    const appt = calendarModule.createAppointment({
+      title: `Appointment with ${contact?.name || senderLabel}`,
+      start: slot.start,
+      end: slot.end,
+      contactId: contact?.id,
+      attendeeName: contact?.name || senderLabel,
+      attendeeEmail,
+      createdVia: channel
+    });
+
+    await gmail.sendCalendarInvite(appt, attendeeEmail);
+    await gmail.sendCalendarInvite(appt, adminEmail);
+    await reply(`You're booked! ${appt.title} on ${new Date(appt.start).toLocaleString()}. I've sent a calendar invite to ${attendeeEmail}.`);
+    await gmail.sendOwnerNotification(`📅 New appointment booked with ${contact?.name || senderLabel}: ${new Date(appt.start).toLocaleString()}`);
+    return true;
+  }
+
+  if (classified.intent === 'reschedule_appointment' || classified.intent === 'cancel_appointment') {
+    const appts = calendarModule.findAppointmentsByContact(contact?.id);
+    if (appts.length === 0) {
+      await reply("I don't see any upcoming appointment on file for you.");
+      return true;
+    }
+
+    let appt;
+    if (appts.length === 1) {
+      appt = appts[0];
+    } else {
+      const phraseDate = calendarModule.parseDatetimePhrase(classified.raw_datetime_phrase);
+      if (phraseDate) {
+        appt = appts.reduce((closest, a) =>
+          (!closest || Math.abs(new Date(a.start) - phraseDate) < Math.abs(new Date(closest.start) - phraseDate)) ? a : closest, null);
+      }
+      if (!appt) {
+        const list = appts.map(a => `- ${new Date(a.start).toLocaleString()}`).join('\n');
+        await reply(`You have a few appointments on file:\n${list}\n\nWhich one do you mean?`);
+        return true;
+      }
+    }
+
+    if (classified.intent === 'cancel_appointment') {
+      calendarModule.cancelAppointment(appt.id);
+      if (appt.attendee_email) await gmail.sendCalendarCancellation(appt, appt.attendee_email);
+      await gmail.sendCalendarCancellation(appt, adminEmail);
+      await reply(`Done — your appointment on ${new Date(appt.start).toLocaleString()} has been cancelled.`);
+      await gmail.sendOwnerNotification(`🚫 Appointment cancelled by ${contact?.name || senderLabel}: was ${new Date(appt.start).toLocaleString()}`);
+      return true;
+    }
+
+    // reschedule_appointment
+    const preferredDate = calendarModule.parseDatetimePhrase(classified.raw_datetime_phrase);
+    const duration = (new Date(appt.end) - new Date(appt.start)) / 60000;
+    const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate, excludeId: appt.id });
+    if (!slot) {
+      await reply("I couldn't find another open slot near that time — I'll have my owner follow up.");
+      return true;
+    }
+    const updated = calendarModule.rescheduleAppointment(appt.id, slot.start, slot.end);
+    if (updated.attendee_email) await gmail.sendCalendarInvite(updated, updated.attendee_email);
+    await gmail.sendCalendarInvite(updated, adminEmail);
+    await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.`);
+    await gmail.sendOwnerNotification(`🔁 Appointment rescheduled for ${contact?.name || senderLabel}: now ${new Date(updated.start).toLocaleString()}`);
+    return true;
+  }
+
+  return false;
+}
+
 // Handle Google Voice forwarded text messages
 async function handleGoogleVoiceText(email) {
   const voiceMsg = gmail.parseGoogleVoiceEmail(email);
@@ -159,6 +268,16 @@ async function handleGoogleVoiceText(email) {
     log.action('index', 'Google Voice text marked spam from ' + voiceMsg.sender_phone);
     return;
   }
+
+  // Scheduling requests are handled separately from the normal auto-reply flow
+  const schedulingHandled = await handleSchedulingMessage({
+    text: voiceMsg.body,
+    contact,
+    channel: 'sms',
+    voiceMsg,
+    senderLabel: voiceMsg.sender_name || voiceMsg.sender_phone
+  });
+  if (schedulingHandled) return;
 
   const shouldAutoReply = contact?.reply_behavior === 'always' ||
                           contact?.reply_behavior === 'auto' ||
@@ -268,6 +387,17 @@ async function handleNewEmail(email) {
     log.action('index', 'Email marked spam from ' + email.from_email);
     return;
   }
+
+  // Scheduling requests are handled separately from the normal auto-reply flow
+  const schedulingHandled = await handleSchedulingMessage({
+    text: email.body,
+    contact,
+    channel: 'email',
+    target: email.from_email,
+    subject: email.subject,
+    senderLabel: email.from_name || email.from_email
+  });
+  if (schedulingHandled) return;
 
   try {
     const reply = await llama.generateEmailReply(

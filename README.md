@@ -22,13 +22,14 @@ There is no cloud AI, no external API key, and no server. The model, the inbox c
 12. [The review queue](#the-review-queue)
 13. [Rule engines](#rule-engines)
 14. [The contact directory](#the-contact-directory)
-15. [Data files](#data-files)
-16. [Source file reference](#source-file-reference)
-17. [Testing](#testing)
-18. [Troubleshooting](#troubleshooting)
-19. [Security notes](#security-notes)
-20. [Known limitations](#known-limitations)
-21. [License](#license)
+15. [Appointment scheduling](#appointment-scheduling)
+16. [Data files](#data-files)
+17. [Source file reference](#source-file-reference)
+18. [Testing](#testing)
+19. [Troubleshooting](#troubleshooting)
+20. [Security notes](#security-notes)
+21. [Known limitations](#known-limitations)
+22. [License](#license)
 
 ---
 
@@ -52,11 +53,12 @@ flowchart TB
             RULES["email-rules.js\nsms-rules.js"]
             LLM["llama.js\nAI calls"]
             CT["contacts.js\ncontacts-sync.js"]
+            CAL["calendar.js\nappointment booking"]
             Q["queue.js"]
             OC["owner-command.js"]
         end
         LS["llama-server\n(Qwen3-4B, local HTTP API)"]
-        DATA[("data/*.json\ncontacts, rules, queue,\nprofile, logs")]
+        DATA[("data/*.json\ncontacts, rules, queue,\ncalendar, profile, logs")]
     end
     GMAIL[("Gmail\nIMAP + SMTP")]
     GV["Google Voice\n(email forwarding)"]
@@ -68,6 +70,8 @@ flowchart TB
     RULES --> LLM
     LLM <--> LS
     GM --> CT
+    GM --> CAL
+    CAL -. ".ics invite/cancel email" .-> GMAIL
     RULES --> Q
     Q --> OC
     OC --> GM
@@ -77,7 +81,7 @@ flowchart TB
     core --- DATA
 ```
 
-Everything after "Gmail" is one long-lived Node.js process (`index.js`) with a single IMAP connection sitting in `IDLE`, plus a small pool of extra IMAP connections opened only for bulk operations (delete/archive/spam-scan/search) so they don't block the main inbox watcher. All AI calls are plain HTTP requests to `llama-server` running on `127.0.0.1:8080` — nothing goes further than that unless it's actual mail traffic to Gmail's IMAP/SMTP servers.
+Everything after "Gmail" is one long-lived Node.js process (`index.js`) with a single IMAP connection sitting in `IDLE`, plus a small pool of extra IMAP connections opened only for bulk operations (delete/archive/spam-scan/search) so they don't block the main inbox watcher. All AI calls are plain HTTP requests to `llama-server` running on `127.0.0.1:8080` — nothing goes further than that unless it's actual mail traffic to Gmail's IMAP/SMTP servers. Appointment scheduling (`calendar.js`) works the same way: no calendar API, no OAuth — bookings reach real calendars as standards-based `.ics` invite emails sent over that same SMTP connection (see [Appointment scheduling](#appointment-scheduling)). Natural-language date/time phrases are resolved deterministically by `chrono-node`, not guessed by the local model.
 
 ## Requirements
 
@@ -301,9 +305,17 @@ Everything else is sent to the local model with a short JSON schema to fill in, 
 | List rules | `list rules` / `list sms rules` | Same as the direct-phrase versions |
 | Find a contact | `find Sarah` | Looks up and returns saved info for a contact |
 | Per-contact instructions | `always reply to Mom` / `never reply to spam caller` / `for my boss, always mention I'm in meetings until 3` | Sets that contact's reply behavior (`always` / `never` / `auto`) and optional standing instructions |
+| Add a contact | `add contact Sarah phone 5551234567` | Creates the contact if it doesn't exist yet, or adds the phone/email to an existing one |
+| Update a contact | `save email john@x.com to Mike` / `change Mike's name to Michael` | Adds a phone/email/relationship/notes, or overwrites the name, on an existing contact |
 | Send an email | `email boss@company.com about the meeting` (or with a saved contact name) | Drafts content via AI and sends, asking for confirmation first if the model flags it as needing one |
 | Pause/resume | `pause` / `pause email` / `pause sms` / `resume` / `resume email` / `resume sms` | Globally or per-channel stop/start processing |
 | Generate content | `write a birthday message for my daughter` | Returns AI-generated text without sending it anywhere |
+| Book an appointment | `book John for next tuesday at 2pm` | Finds the nearest available slot at/after that time within working hours, books it, and emails a calendar invite to John and to you |
+| Move an appointment | `move John's appointment to friday 3pm` | Reschedules John's nearest upcoming appointment and resends an updated invite |
+| Cancel an appointment | `cancel John's appointment` | Confirmation-gated — see below |
+| List appointments | `what's on my calendar` | Lists upcoming appointments |
+| Set working hours | `set working hours 9am to 5pm monday through friday` | Updates the hours Aigentik will book appointments within |
+| Set duration by role | `lawyers get 60 minute appointments` | Sets a default appointment length for contacts with that relationship label |
 | Anything unrecognized | — | Falls back to a plain conversational reply from the model |
 
 ### Confirmation-gated (destructive) commands
@@ -315,6 +327,8 @@ These never run immediately — Aigentik describes what it's about to do and wai
 | `delete all emails` | Permanently deletes (moves to Trash) every message in the inbox |
 | `archive all emails` / `clean inbox` | Archives (moves to All Mail) every message in the inbox |
 | `spam all promotional emails` | Scans every inbox message, evaluates each one against the same promotional-content check used for auto-detection, and moves only the matches to Spam — reports back how many were scanned vs. actually moved |
+| `delete contact [name]` | Permanently removes that contact from `contacts.json` |
+| `cancel [name]'s appointment` | Cancels the appointment and emails a cancellation notice (matching `.ics` `CANCEL`) to both the contact and you |
 
 Only one confirmation can be pending at a time; if you say anything other than yes/no while one is outstanding, the pending action is discarded and your new message is processed as a fresh command.
 
@@ -351,6 +365,24 @@ Add rules conversationally — `add email rule: auto-reply to anything from boss
 
 Reply behavior per contact overrides the general rule engine: setting someone to `never` stops all processing for them outright (still logged, no reply, no queue item); `always` skips the rule engine and auto-replies unconditionally.
 
+## Appointment scheduling
+
+Aigentik can negotiate, book, reschedule, and cancel appointments from incoming emails and Google Voice texts — entirely without a calendar API or OAuth. It's the same self-hosted pattern as the contact directory: `calendar.js` is the source of truth, backed by two flat files, and events reach your real calendar as standards-based `.ics` invite emails rather than through any third-party integration.
+
+**How a booking request is detected.** After the spam-rule check (so spam never triggers a booking) and before the normal auto-reply flow, a cheap keyword pre-filter (`appointment`, `schedule`, `book`, `reschedule`, `cancel`, `available`, etc.) gates a classification call to the local model, which returns an intent (`request_appointment` / `reschedule_appointment` / `cancel_appointment` / `none`) plus the raw natural-language time phrase, verbatim. Everything that isn't scheduling-related falls straight through to the existing auto-reply/queue flow, untouched.
+
+**How the time is actually resolved.** The 4B local model isn't reliable for exact date arithmetic ("next Tuesday afternoon" → a real timestamp), so that step is deterministic, not LLM-guessed: the extracted phrase is handed to `chrono-node` (a small, fully local, zero-network parsing library — no different in kind from `imapflow`/`nodemailer`), anchored to the current time.
+
+**How a slot is chosen.** `calendar.findNextAvailableSlot` checks the requested time against your configured working hours and existing bookings (with a buffer between appointments); if it's free, it's booked as-is. If not — or if no specific time was mentioned — Aigentik walks forward and books the *nearest* open slot, honoring a rolling booking window (365 days by default), which is what makes "always try to book the closest available date" work even when the exact ask isn't available.
+
+**How it reaches your real calendar.** Every booking or reschedule emails an `.ics` invite (`METHOD:REQUEST`) to the other party and to `owner.admin_email`, so it shows up in your actual Gmail-linked calendar the normal way mail clients render "Add to Calendar" — no API call involved. Cancellations send a matching `METHOD:CANCEL` with the same UID, which most calendar apps use to auto-remove the event, plus the explicit cancellation notice to your admin email. Rescheduling bumps the iCal `SEQUENCE` number so calendar apps treat it as an update to the existing event rather than a duplicate.
+
+**Tracking who booked what.** Every appointment is tied to the sender's contact record (`contact_id`), so when that same person later messages to reschedule or cancel, `calendar.findAppointmentsByContact` resolves to the right appointment automatically — including picking the closest match by date if they have more than one on file.
+
+**Configuring it.** Say things like `set working hours 9am to 5pm monday through friday` or `lawyers get 60 minute appointments` (keyed off the contact's `relationship` field) — no need to edit files directly. Defaults if you never touch this: 9am–5pm Monday–Friday, 30-minute appointments, 15-minute buffer between bookings.
+
+**The tradeoff.** This is push-only: Aigentik can put events on your calendar and take them off, but it can't read changes you make directly in your calendar app, and it has no visibility into anyone else's real availability beyond whatever time they mention in their message.
+
 ## Data files
 
 Everything persistent lives under `data/` (configurable via `paths.data_dir`):
@@ -360,6 +392,8 @@ Everything persistent lives under `data/` (configurable via `paths.data_dir`):
 | `contacts.json` | The contact directory described above |
 | `email-rules.json` | Saved email rules |
 | `sms-rules.json` | Saved Google Voice rules |
+| `calendar.json` | Appointment records — see [Appointment scheduling](#appointment-scheduling) |
+| `schedule-config.json` | Working hours, appointment buffer, booking window, and per-relationship durations |
 | `pending.json` | The review queue |
 | `profile.json` | Aigentik's chosen name, your name, setup date |
 | `logs/` | Daily structured JSON logs (`aigentik-YYYY-MM-DD.log`), written by `logger.js` |
@@ -371,7 +405,8 @@ Everything persistent lives under `data/` (configurable via `paths.data_dir`):
 | File | Role |
 |---|---|
 | `index.js` | Entry point: starts `llama-server`, warms it up, loads the profile, kicks off contact sync, connects Gmail, and routes every incoming email to the right handler |
-| `email-provider.js` | The actual IMAP/SMTP client — connection lifecycle, IDLE loop, reconnection with backoff, message parsing, send/delete/archive/spam/search operations, Google Voice email parsing |
+| `email-provider.js` | The actual IMAP/SMTP client — connection lifecycle, IDLE loop, reconnection with backoff, message parsing, send/delete/archive/spam/search operations, Google Voice email parsing, `.ics` calendar invite/cancellation building and sending |
+| `calendar.js` | The appointment calendar: working-hours/duration config, slot-finding, booking/reschedule/cancel, and deterministic (`chrono-node`-backed) natural-language date/time-range parsing |
 | `gmail.js` | Thin compatibility wrapper around `email-provider.js` so the rest of the app has a stable, simple API |
 | `owner-command.js` | Parses and executes every owner command, whether it arrived via Google Voice text or admin email |
 | `llama.js` | All calls to the local model: email/SMS reply generation, natural-language command interpretation, entity extraction, tone detection, general content generation |
@@ -389,7 +424,7 @@ Everything persistent lives under `data/` (configurable via `paths.data_dir`):
 npm test
 ```
 
-Runs the Jest suite (`tests/email-provider.test.js`, `tests/gmail-compat.test.js`) covering the IMAP connection lifecycle, the new-mail trigger and concurrency guard, message parsing, spam-by-predicate and spam-by-UID, and the full `gmail.js` public API surface. `npm test` also collects coverage; a plain non-coverage run is available as:
+Runs the Jest suite (`tests/email-provider.test.js`, `tests/gmail-compat.test.js`, `tests/calendar.test.js`) covering the IMAP connection lifecycle, the new-mail trigger and concurrency guard, message parsing, spam-by-predicate and spam-by-UID, `.ics` invite/cancellation building, natural-language working-hours/date-phrase parsing, and the full `gmail.js` public API surface. File-backed calendar/contact operations (slot-finding, booking) aren't run under Jest — they read `paths.data_dir` from the real `config.json`, so exercising them via the test suite would write into your live `data/` directory; they're covered by manual sandbox testing instead, the same gap `contacts.js`/`queue.js` already have. `npm test` also collects coverage; a plain non-coverage run is available as:
 
 ```bash
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.mjs
@@ -434,6 +469,8 @@ Run it manually to see the real error if `start.sh` just reports failure.
 - `spam [#]` on a queue item created before UID tracking was added falls back to "spam everything from this sender" rather than the one message, since older items have nothing more specific stored.
 - `behavior.require_confirmation_for_destructive` and `behavior.tone_matching` are configuration fields that don't currently gate anything — destructive-action confirmation and tone detection always run regardless of their value.
 - `sms.poll_interval_ms` / `sms.max_sms_fetch` are vestigial config fields with no code reading them.
+- Appointment scheduling is push-only: Aigentik can create/update/remove events via `.ics` email, but can't read changes made directly in your calendar app, and has no visibility into anyone else's real availability beyond what they state in their message.
+- If a contact messages to reschedule/cancel while they have more than one upcoming appointment on file, Aigentik picks the closest match to any date they mentioned, or asks which one if it can't tell — it doesn't track multi-turn disambiguation state across messages.
 
 ## License
 

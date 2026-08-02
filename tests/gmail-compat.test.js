@@ -10,6 +10,8 @@ describe('gmail.js compatibility wrapper', () => {
     expect(typeof gmail.sendReply).toBe('function');
     expect(typeof gmail.sendEmail).toBe('function');
     expect(typeof gmail.sendOwnerNotification).toBe('function');
+    expect(typeof gmail.sendCalendarInvite).toBe('function');
+    expect(typeof gmail.sendCalendarCancellation).toBe('function');
     expect(typeof gmail.deleteEmails).toBe('function');
     expect(typeof gmail.archiveEmails).toBe('function');
     expect(typeof gmail.markAsSpam).toBe('function');
@@ -30,6 +32,8 @@ describe('gmail.js compatibility wrapper', () => {
     expect(defaultExport.sendReply).toBeDefined();
     expect(defaultExport.sendEmail).toBeDefined();
     expect(defaultExport.sendOwnerNotification).toBeDefined();
+    expect(defaultExport.sendCalendarInvite).toBeDefined();
+    expect(defaultExport.sendCalendarCancellation).toBeDefined();
     expect(defaultExport.deleteEmails).toBeDefined();
     expect(defaultExport.archiveEmails).toBeDefined();
     expect(defaultExport.markAsSpam).toBeDefined();

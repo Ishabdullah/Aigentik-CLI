@@ -715,6 +715,94 @@ class EmailProvider {
   }
 
   /**
+   * Build a VCALENDAR/VEVENT block for an appointment. method is 'REQUEST'
+   * for new/updated bookings or 'CANCEL' to retract — mail clients that
+   * understand iCalendar (Gmail, Outlook, Apple Mail) auto-render an
+   * "Add to Calendar" affordance for REQUEST and auto-remove the event for
+   * CANCEL, entirely client-side — no calendar API/OAuth involved.
+   */
+  buildIcs(appointment, method) {
+    const toIcsDate = (iso) => new Date(iso).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const organizerEmail = this.config.gmail.email;
+    const attendeeEmail = appointment.attendee_email || organizerEmail;
+    const status = method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED';
+
+    return [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Aigentik//Scheduling//EN',
+      `METHOD:${method}`,
+      'BEGIN:VEVENT',
+      `UID:${appointment.uid}`,
+      `SEQUENCE:${appointment.ics_sequence || 0}`,
+      `DTSTAMP:${toIcsDate(new Date().toISOString())}`,
+      `DTSTART:${toIcsDate(appointment.start)}`,
+      `DTEND:${toIcsDate(appointment.end)}`,
+      `SUMMARY:${appointment.title}`,
+      `ORGANIZER:mailto:${organizerEmail}`,
+      `ATTENDEE:mailto:${attendeeEmail}`,
+      `STATUS:${status}`,
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n');
+  }
+
+  /**
+   * Send (or resend, on reschedule) a calendar invite for an appointment to
+   * one recipient. Call once per recipient (attendee, owner) since nodemailer
+   * only supports a single icalEvent per message.
+   */
+  async sendCalendarInvite(appointment, toEmail, bodyText) {
+    const transporter = this.getTransporter();
+    const fromName = this.config.aigentik_name || 'Aigentik';
+    try {
+      await transporter.sendMail({
+        from: `${fromName} <${this.config.gmail.email}>`,
+        to: toEmail,
+        subject: appointment.title,
+        text: bodyText || `You're booked: ${appointment.title} at ${new Date(appointment.start).toLocaleString()}.`,
+        icalEvent: {
+          filename: 'invite.ics',
+          method: 'REQUEST',
+          content: this.buildIcs(appointment, 'REQUEST')
+        }
+      });
+      this.logger.action('email-provider', `Calendar invite sent to ${toEmail}`, { appointmentId: appointment.id });
+      return true;
+    } catch (error) {
+      this.logger.error('email-provider', `Failed to send calendar invite to ${toEmail}`, { error: error.message });
+      return false;
+    }
+  }
+
+  /**
+   * Send a cancellation for an appointment to one recipient — matches the
+   * original UID so calendar apps remove the event automatically.
+   */
+  async sendCalendarCancellation(appointment, toEmail, bodyText) {
+    const transporter = this.getTransporter();
+    const fromName = this.config.aigentik_name || 'Aigentik';
+    try {
+      await transporter.sendMail({
+        from: `${fromName} <${this.config.gmail.email}>`,
+        to: toEmail,
+        subject: `Cancelled: ${appointment.title}`,
+        text: bodyText || `This appointment has been cancelled: ${appointment.title} (was ${new Date(appointment.start).toLocaleString()}).`,
+        icalEvent: {
+          filename: 'cancel.ics',
+          method: 'CANCEL',
+          content: this.buildIcs(appointment, 'CANCEL')
+        }
+      });
+      this.logger.action('email-provider', `Calendar cancellation sent to ${toEmail}`, { appointmentId: appointment.id });
+      return true;
+    } catch (error) {
+      this.logger.error('email-provider', `Failed to send calendar cancellation to ${toEmail}`, { error: error.message });
+      return false;
+    }
+  }
+
+  /**
    * Graceful disconnect
    */
   async disconnect() {
