@@ -196,15 +196,20 @@ class EmailProvider {
    * Set up IMAP event handlers
    */
   setupEventHandlers() {
-    this.imapClient.on('exists', (count) => {
+    this.imapClient.on('exists', ({ count, prevCount }) => {
       this.logger.debug('email-provider', `Mailbox exists update: ${count} messages`);
+      if (count > prevCount) {
+        this.handleNewMail().catch((error) => {
+          this.logger.error('email-provider', 'Failed to handle new mail from exists event', { error: error.message });
+        });
+      }
     });
 
     this.imapClient.on('update', (update) => {
       this.logger.debug('email-provider', 'Mailbox update', { update });
     });
 
-    this.imapClient.on('expunge', (seq) => {
+    this.imapClient.on('expunge', ({ seq }) => {
       this.logger.debug('email-provider', `Message expunged: ${seq}`);
     });
 
@@ -249,9 +254,7 @@ class EmailProvider {
       try {
         this.logger.debug('email-provider', 'Starting IDLE...');
         await this.imapClient.idle();
-        this.logger.debug('email-provider', 'IDLE ended — new mail detected');
-        // Fetch and process new mail
-        await this.handleNewMail();
+        this.logger.debug('email-provider', 'IDLE ended, restarting');
       } catch (error) {
         if (!this.isShuttingDown) {
           this.logger.error('email-provider', 'IDLE error', { error: error.message });
@@ -271,10 +274,18 @@ class EmailProvider {
     try {
       // Search for unseen messages since startup
       const sinceDate = this.startupTime.toISOString().split('T')[0]; // YYYY-MM-DD
-      const messages = await this.imapClient.fetch(
+
+      // Fully drain the fetch generator before issuing any other command on this
+      // connection: the underlying FETCH command doesn't complete (and release the
+      // connection) until every yielded row is pulled, so running messageFlagsAdd
+      // or anything else per-row here would deadlock the connection against itself.
+      const messages = [];
+      for await (const msg of this.imapClient.fetch(
         { unseen: true, since: sinceDate },
         { source: true, uid: true }
-      );
+      )) {
+        messages.push(msg);
+      }
 
       for (const msg of messages) {
         try {
@@ -292,8 +303,10 @@ class EmailProvider {
             uid: msg.uid
           });
 
-          // Mark as seen
-          await this.imapClient.messageFlagsAdd(msg.uid, ['\\Seen']);
+          // Mark as seen (uid: true is required — otherwise msg.uid is misread as a
+          // sequence number, silently marking the wrong message and leaving this one
+          // "unseen" forever, so it gets reprocessed and re-replied to on every poll)
+          await this.imapClient.messageFlagsAdd(msg.uid, ['\\Seen'], { uid: true });
 
           // Callback to application
           await this.onNewMailCallback(email);
@@ -379,7 +392,7 @@ class EmailProvider {
   async searchEmails(criteria) {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: true });
-      const uids = await client.search(criteria);
+      const uids = await client.search(criteria, { uid: true });
       return uids || [];
     });
   }
@@ -390,10 +403,10 @@ class EmailProvider {
   async deleteEmails(criteria) {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: false });
-      const uids = await client.search(criteria);
+      const uids = await client.search(criteria, { uid: true });
       if (!uids.length) return { deleted: 0 };
 
-      await client.messageMove(uids, '[Gmail]/Trash');
+      await client.messageMove(uids, '[Gmail]/Trash', { uid: true });
       this.logger.action('email-provider', `Deleted ${uids.length} email(s)`);
       return { deleted: uids.length };
     });
@@ -405,10 +418,10 @@ class EmailProvider {
   async archiveEmails(criteria) {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: false });
-      const uids = await client.search(criteria);
+      const uids = await client.search(criteria, { uid: true });
       if (!uids.length) return { archived: 0 };
 
-      await client.messageMove(uids, '[Gmail]/All Mail');
+      await client.messageMove(uids, '[Gmail]/All Mail', { uid: true });
       this.logger.action('email-provider', `Archived ${uids.length} email(s)`);
       return { archived: uids.length };
     });
@@ -420,10 +433,10 @@ class EmailProvider {
   async markAsSpam(criteria) {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: false });
-      const uids = await client.search(criteria);
+      const uids = await client.search(criteria, { uid: true });
       if (!uids.length) return { spam: 0 };
 
-      await client.messageMove(uids, '[Gmail]/Spam');
+      await client.messageMove(uids, '[Gmail]/Spam', { uid: true });
       this.logger.action('email-provider', `Marked ${uids.length} email(s) as spam`);
       return { spam: uids.length };
     });
@@ -435,10 +448,10 @@ class EmailProvider {
   async markAsRead(criteria) {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: false });
-      const uids = await client.search(criteria);
+      const uids = await client.search(criteria, { uid: true });
       if (!uids.length) return { marked: 0 };
 
-      await client.messageFlagsAdd(uids, ['\\Seen']);
+      await client.messageFlagsAdd(uids, ['\\Seen'], { uid: true });
       this.logger.action('email-provider', `Marked ${uids.length} email(s) as read`);
       return { marked: uids.length };
     });
@@ -450,10 +463,10 @@ class EmailProvider {
   async markAsUnread(criteria) {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: false });
-      const uids = await client.search(criteria);
+      const uids = await client.search(criteria, { uid: true });
       if (!uids.length) return { marked: 0 };
 
-      await client.messageFlagsRemove(uids, ['\\Seen']);
+      await client.messageFlagsRemove(uids, ['\\Seen'], { uid: true });
       this.logger.action('email-provider', `Marked ${uids.length} email(s) as unread`);
       return { marked: uids.length };
     });
@@ -465,11 +478,11 @@ class EmailProvider {
   async labelEmails(criteria, labelName) {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: false });
-      const uids = await client.search(criteria);
+      const uids = await client.search(criteria, { uid: true });
       if (!uids.length) return { labeled: 0 };
 
       // Gmail uses labels as flags
-      await client.messageFlagsAdd(uids, [labelName]);
+      await client.messageFlagsAdd(uids, [labelName], { uid: true });
       this.logger.action('email-provider', `Labeled ${uids.length} email(s) as "${labelName}"`);
       return { labeled: uids.length };
     });
@@ -481,10 +494,10 @@ class EmailProvider {
   async markAllAsSeen() {
     return this.withManagementConnection(async (client) => {
       await client.mailboxOpen('INBOX', { readOnly: false });
-      const uids = await client.search({ unseen: true });
+      const uids = await client.search({ unseen: true }, { uid: true });
       if (!uids.length) return { marked: 0 };
 
-      await client.messageFlagsAdd(uids, ['\\Seen']);
+      await client.messageFlagsAdd(uids, ['\\Seen'], { uid: true });
       this.logger.action('email-provider', `Marked all ${uids.length} emails as seen`);
       return { marked: uids.length };
     });
@@ -628,15 +641,6 @@ class EmailProvider {
   async disconnect() {
     this.logger.info('email-provider', 'Disconnecting...');
     this.isShuttingDown = true;
-
-    // Stop IDLE
-    if (this.idlePromise) {
-      try {
-        await this.imapClient?.idleDone();
-      } catch (e) {
-        // Ignore
-      }
-    }
 
     // Close main connection
     if (this.imapClient) {

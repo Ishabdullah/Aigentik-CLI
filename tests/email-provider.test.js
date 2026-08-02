@@ -1,5 +1,6 @@
 // tests/email-provider.test.js — Unit tests for EmailProvider
 
+import { jest } from '@jest/globals';
 import { EmailProvider } from '../email-provider.js';
 
 describe('EmailProvider', () => {
@@ -120,6 +121,74 @@ describe('EmailProvider', () => {
       expect(parsed.sender_name).toBe('Jane');
       expect(parsed.sender_phone).toBe('5559876543');
     });
+  });
+});
+
+describe('EmailProvider new mail handling', () => {
+  let provider;
+
+  beforeEach(() => {
+    provider = new EmailProvider({
+      config: {
+        gmail: {
+          email: 'test@gmail.com',
+          app_password: 'testpassword',
+          imap_host: 'imap.gmail.com',
+          imap_port: 993,
+          smtp_host: 'smtp.gmail.com',
+          smtp_port: 587
+        }
+      }
+    });
+  });
+
+  it('setupEventHandlers triggers handleNewMail when exists count increases', () => {
+    const handlers = {};
+    provider.imapClient = {
+      on: (event, handler) => {
+        handlers[event] = handler;
+      }
+    };
+    provider.handleNewMail = jest.fn().mockResolvedValue();
+
+    provider.setupEventHandlers();
+    handlers.exists({ count: 26, prevCount: 25 });
+
+    expect(provider.handleNewMail).toHaveBeenCalledTimes(1);
+  });
+
+  it('setupEventHandlers does not trigger handleNewMail when exists count decreases', () => {
+    const handlers = {};
+    provider.imapClient = {
+      on: (event, handler) => {
+        handlers[event] = handler;
+      }
+    };
+    provider.handleNewMail = jest.fn().mockResolvedValue();
+
+    provider.setupEventHandlers();
+    handlers.exists({ count: 24, prevCount: 25 });
+
+    expect(provider.handleNewMail).not.toHaveBeenCalled();
+  });
+
+  it('handleNewMail iterates the async-generator fetch result and processes each message', async () => {
+    provider.startupTime = new Date('2020-01-01T00:00:00Z');
+    provider.onNewMailCallback = jest.fn().mockResolvedValue();
+
+    async function* fakeFetch() {
+      yield { uid: 1, source: Buffer.from('From: a@b.com\r\nSubject: Hi\r\n\r\nBody') };
+    }
+
+    provider.imapClient = {
+      fetch: () => fakeFetch(),
+      messageFlagsAdd: jest.fn().mockResolvedValue(true)
+    };
+
+    await provider.handleNewMail();
+
+    expect(provider.imapClient.messageFlagsAdd).toHaveBeenCalledWith(1, ['\\Seen'], { uid: true });
+    expect(provider.onNewMailCallback).toHaveBeenCalledTimes(1);
   });
 });
 
