@@ -249,7 +249,9 @@ class EmailProvider {
       try {
         this.logger.debug('email-provider', 'Starting IDLE...');
         await this.imapClient.idle();
-        this.logger.debug('email-provider', 'IDLE ended normally');
+        this.logger.debug('email-provider', 'IDLE ended — new mail detected');
+        // Fetch and process new mail
+        await this.handleNewMail();
       } catch (error) {
         if (!this.isShuttingDown) {
           this.logger.error('email-provider', 'IDLE error', { error: error.message });
