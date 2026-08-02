@@ -2,16 +2,16 @@
 // Handles incoming SMS from non-owner numbers
 // Respects per-contact instructions, applies rules, adds agent signature
 
-const config = require('./config.json');
-const log = require('./logger');
-const llama = require('./llama');
-const smsSend = require('./sms-send');
-const smsRules = require('./sms-rules');
-const contacts = require('./contacts');
-const queue = require('./queue');
-const tone = require('./tone');
-const fs = require('fs');
-const path = require('path');
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
+import * as llama from './llama.js';
+import * as smsSend from './sms-send.js';
+import * as smsRules from './sms-rules.js';
+import * as contacts from './contacts.js';
+import * as queue from './queue.js';
+import * as tone from './tone.js';
+import fs from 'fs';
+import path from 'path';
 
 function getOwnerName() {
   try {
@@ -31,11 +31,9 @@ async function handlePublicSms(sms) {
   const { address, body } = sms;
   log.info('sms-public', 'Public SMS from ' + address, { preview: body?.substring(0, 50) });
 
-  // Find or create contact
   const contact = contacts.findOrCreateByPhone(address);
   contacts.addHistory(address, { type: 'sms_received', preview: body?.substring(0, 100) });
 
-  // Extract entities to build contact intelligence
   try {
     const entities = await llama.extractEntities(body);
     contacts.processEntities(entities, 'sms');
@@ -46,7 +44,6 @@ async function handlePublicSms(sms) {
   const ownerName = getOwnerName();
   const agentName = config.aigentik_name || 'Axon';
 
-  // Check for urgent keyword — notify owner immediately
   if (body && ownerName && body.toLowerCase().includes(ownerName.toLowerCase())) {
     smsSend.notifyOwner(
       '🚨 URGENT: ' + (contact?.name || address) + ' is trying to reach you directly!\nMessage: "' + body.substring(0, 100) + '"'
@@ -54,7 +51,6 @@ async function handlePublicSms(sms) {
     log.action('sms-public', 'Urgent message detected — owner notified');
   }
 
-  // Check per-contact reply behavior first
   if (contact?.reply_behavior === 'never') {
     log.info('sms-public', 'Contact set to never reply — skipping', { contact: contact.name });
     smsSend.notifyOwner('📵 Ignored SMS from ' + (contact.name || address) + ' (set to never reply)');
@@ -62,7 +58,6 @@ async function handlePublicSms(sms) {
   }
 
   if (contact?.reply_behavior === 'review') {
-    // Force to review queue regardless of rules
     try {
       const detectedTone = await tone.detectTone(body);
       const draftReply = await llama.generateSmsReply(
@@ -82,10 +77,8 @@ async function handlePublicSms(sms) {
     return;
   }
 
-  // Check SMS rules
   const { action, rule } = smsRules.checkRules(sms);
 
-  // If contact has 'always' behavior or rule says auto-reply
   const shouldAutoReply = contact?.reply_behavior === 'always' || action === 'auto-reply';
 
   if (action === 'spam') {
@@ -116,7 +109,6 @@ async function handlePublicSms(sms) {
     return;
   }
 
-  // Default — queue for review
   try {
     const detectedTone = await tone.detectTone(body);
     const draftReply = await llama.generateSmsReply(
@@ -135,4 +127,4 @@ async function handlePublicSms(sms) {
   }
 }
 
-module.exports = { handlePublicSms };
+export { handlePublicSms };

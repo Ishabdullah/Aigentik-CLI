@@ -1,11 +1,11 @@
 // first-run.js — Aigentik first launch setup wizard
 // Checks if configured, if not sends SMS to owner asking for a name
 
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-const config = require('./config.json');
-const log = require('./logger');
+import fs from 'fs';
+import path from 'path';
+import { execSync } from 'child_process';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 const ADMIN_NUMBER = config.owner.admin_number_formatted;
@@ -37,7 +37,6 @@ function fetchLatestSmsFromOwner(timeoutMs = 120000) {
   const start = Date.now();
   log.info('first-run', 'Waiting for owner to reply with Aigentik name...');
 
-  // Get current latest SMS ID to watch for NEW messages only
   let lastKnownId = null;
   try {
     const initial = JSON.parse(
@@ -46,7 +45,6 @@ function fetchLatestSmsFromOwner(timeoutMs = 120000) {
     if (initial.length > 0) lastKnownId = initial[0]._id;
   } catch (e) {}
 
-  // Poll every 5 seconds waiting for owner reply
   while (Date.now() - start < timeoutMs) {
     execSync('sleep 5');
     try {
@@ -55,10 +53,8 @@ function fetchLatestSmsFromOwner(timeoutMs = 120000) {
       );
 
       for (const sms of messages) {
-        // Skip already seen messages
         if (lastKnownId && sms._id <= lastKnownId) continue;
 
-        // Check if from owner
         const senderNorm = sms.address.replace(/[^0-9]/g, '').slice(-10);
         const adminNorm = config.owner.admin_number.replace(/[^0-9]/g, '').slice(-10);
 
@@ -82,14 +78,12 @@ async function runIfNeeded() {
 
   if (profile.configured && profile.aigentik_name) {
     log.info('first-run', `Aigentik already configured as "${profile.aigentik_name}"`);
-    // Inject name into config for other modules to use
     config.aigentik_name = profile.aigentik_name;
     return profile.aigentik_name;
   }
 
   log.info('first-run', 'First run detected — starting setup wizard');
 
-  // Send welcome SMS to owner
   const sent = sendSms(
     ADMIN_NUMBER,
     'Welcome to Aigentik! I\'m your new AI assistant. What would you like to call me? Reply with a name.'
@@ -97,7 +91,6 @@ async function runIfNeeded() {
 
   if (!sent) {
     log.error('first-run', 'Could not send setup SMS. Check Termux:API permissions.');
-    // Use default name so system can still start
     const defaultName = 'Aigentik';
     profile.configured = true;
     profile.aigentik_name = defaultName;
@@ -107,7 +100,6 @@ async function runIfNeeded() {
     return defaultName;
   }
 
-  // Wait up to 2 minutes for owner to reply
   const chosenName = fetchLatestSmsFromOwner(120000);
 
   if (!chosenName) {
@@ -122,10 +114,8 @@ async function runIfNeeded() {
     return defaultName;
   }
 
-  // Clean the name — capitalize first letter
   const name = chosenName.charAt(0).toUpperCase() + chosenName.slice(1).toLowerCase();
 
-  // Save to profile
   profile.configured = true;
   profile.aigentik_name = name;
   profile.setup_date = new Date().toISOString();
@@ -134,7 +124,6 @@ async function runIfNeeded() {
 
   log.info('first-run', `Aigentik named "${name}" — setup complete`);
 
-  // Confirm to owner
   sendSms(
     ADMIN_NUMBER,
     `Perfect! I'm ${name}, your personal AI assistant. I'm now monitoring your email and messages. Text me anytime to give instructions!`
@@ -143,5 +132,4 @@ async function runIfNeeded() {
   return name;
 }
 
-module.exports = { runIfNeeded };
-
+export { runIfNeeded };

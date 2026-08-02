@@ -1,17 +1,14 @@
 // sms-send.js — Aigentik SMS sender
 // Uses termux-api to send SMS messages from the phone
 
-const { execSync } = require('child_process');
-const config = require('./config.json');
-const log = require('./logger');
+import { execSync } from 'child_process';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 // Send an SMS to any number
 function sendSms(toNumber, message) {
   try {
-    // Clean the number — remove spaces, dashes, etc
     const cleanNumber = toNumber.replace(/[^0-9+]/g, '');
-
-    // Escape single quotes in message for shell safety
     const safeMessage = message.replace(/'/g, "'\\''");
 
     const cmd = `termux-sms-send -n "${cleanNumber}" '${safeMessage}'`;
@@ -23,7 +20,6 @@ function sendSms(toNumber, message) {
     execSync(cmd, { timeout: 15000 });
     log.info('sms-send', `SMS sent successfully to ${cleanNumber}`);
     return true;
-
   } catch (e) {
     log.error('sms-send', `Failed to send SMS to ${toNumber}`, { error: e.message });
     return false;
@@ -38,8 +34,6 @@ function notifyOwner(message) {
 
 // Send a long message — splits if over 160 chars
 function sendLongSms(toNumber, message) {
-  // SMS can handle up to ~1600 chars in practice on Android
-  // but we split at 1500 to be safe
   if (message.length <= 1500) {
     return sendSms(toNumber, message);
   }
@@ -56,7 +50,6 @@ function sendLongSms(toNumber, message) {
   chunks.forEach((chunk, i) => {
     const part = chunks.length > 1 ? `[${i + 1}/${chunks.length}] ${chunk}` : chunk;
     if (!sendSms(toNumber, part)) allSent = false;
-    // Small delay between parts
     if (i < chunks.length - 1) {
       execSync('sleep 1');
     }
@@ -64,9 +57,4 @@ function sendLongSms(toNumber, message) {
   return allSent;
 }
 
-module.exports = {
-  sendSms,
-  notifyOwner,
-  sendLongSms
-};
-
+export { sendSms, notifyOwner, sendLongSms };

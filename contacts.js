@@ -2,10 +2,10 @@
 // Builds and maintains a growing directory of contacts
 // Gets smarter the more Aigentik is used
 
-const fs = require('fs');
-const path = require('path');
-const config = require('./config.json');
-const log = require('./logger');
+import fs from 'fs';
+import path from 'path';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const CONTACTS_FILE = path.join(config.paths.data_dir, 'contacts.json');
 
@@ -92,8 +92,8 @@ function createContact({ name, phones, emails, relationship, type, notes, source
     relationship: relationship || null,
     type: type || 'unknown',
     notes: notes || null,
-    instructions: null,      // Per-contact reply instructions set by owner
-    reply_behavior: 'auto',  // auto, never, always, review
+    instructions: null,
+    reply_behavior: 'auto',
     source: source || 'auto',
     first_seen: new Date().toISOString(),
     last_contact: new Date().toISOString(),
@@ -118,7 +118,6 @@ function updateContact(id, updates) {
 
   const contact = contacts[idx];
 
-  // Merge arrays (phones, emails) without duplicates
   if (updates.phones) {
     const newPhones = [updates.phones].flat().filter(Boolean);
     newPhones.forEach(p => {
@@ -144,7 +143,6 @@ function updateContact(id, updates) {
     });
   }
 
-  // Simple field updates
   if (updates.name && !contact.name) contact.name = updates.name;
   if (updates.relationship) contact.relationship = updates.relationship;
   if (updates.type && contact.type === 'unknown') contact.type = updates.type;
@@ -160,7 +158,7 @@ function updateContact(id, updates) {
   return contact;
 }
 
-// Add a history entry to a contact (what messages/emails came from them)
+// Add a history entry to a contact
 function addHistory(identifier, historyEntry) {
   const contact = findContact(identifier);
   if (!contact) return;
@@ -170,7 +168,6 @@ function addHistory(identifier, historyEntry) {
   if (idx === -1) return;
 
   if (!contacts[idx].history) contacts[idx].history = [];
-  // Keep last 50 history entries per contact
   contacts[idx].history.push({
     ...historyEntry,
     timestamp: new Date().toISOString()
@@ -190,7 +187,6 @@ function processEntities(entities, source) {
 
   const { names, phones, emails, businesses, relationships } = entities;
 
-  // Try to match existing contacts or create new ones
   phones.forEach((phone, i) => {
     let contact = findContact(phone);
     if (!contact) {
@@ -300,7 +296,7 @@ function setContactInstructions(identifier, instructions, behavior) {
   const idx = contacts.findIndex(c => c.id === contact.id);
   if (idx === -1) return null;
   if (instructions) contacts[idx].instructions = instructions;
-  if (behavior) contacts[idx].reply_behavior = behavior; // auto, never, always, review
+  if (behavior) contacts[idx].reply_behavior = behavior;
   saveContacts(contacts);
   log.info('contacts', 'Contact instructions updated', { id: contact.id, instructions, behavior });
   return contacts[idx];
@@ -327,7 +323,7 @@ function formatContactInfo(contact) {
   return lines.join('\n');
 }
 
-module.exports = {
+export {
   findContact,
   findByRelationship,
   findAllByName,

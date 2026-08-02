@@ -2,10 +2,10 @@
 // Supports: from, domain, subject_contains, body_contains, promotional, any
 // Default action when no rule matches: auto-reply
 
-const fs = require('fs');
-const path = require('path');
-const config = require('./config.json');
-const log = require('./logger');
+import fs from 'fs';
+import path from 'path';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const RULES_FILE = path.join(config.paths.data_dir, 'email-rules.json');
 
@@ -49,7 +49,7 @@ function addRule({ description, condition_type, condition_value, action, added_b
     created_at: new Date().toISOString(),
     match_count: 0
   };
-  rules.unshift(rule); // Add to top so newer rules take priority
+  rules.unshift(rule);
   saveRules(rules);
   log.info('email-rules', `Rule added: ${description}`, { action });
   return rule;
@@ -95,7 +95,6 @@ function checkRules(email) {
         matched = from.includes(val);
         break;
       case 'domain':
-        // Match @domain.com anywhere in from address
         matched = from.includes(`@${val}`) || from.includes(val);
         break;
       case 'subject_contains':
@@ -113,7 +112,6 @@ function checkRules(email) {
     }
 
     if (matched) {
-      // Update match stats
       const allRules = loadRules();
       const rIdx = allRules.findIndex(r => r.id === rule.id);
       if (rIdx !== -1) {
@@ -126,7 +124,6 @@ function checkRules(email) {
     }
   }
 
-  // No rule matched — use default from config
   const defaultAction = config.behavior?.default_unmatched_action || 'auto-reply';
   log.debug('email-rules', `No rule matched for email from ${email.from} — default: ${defaultAction}`);
   return { action: defaultAction, rule: null, reason: 'default' };
@@ -146,4 +143,4 @@ function listRulesForSms() {
   return lines.join('\n');
 }
 
-module.exports = { addRule, removeRule, checkRules, listRulesForSms, loadRules, isPromotional };
+export { addRule, removeRule, checkRules, listRulesForSms, loadRules, isPromotional };

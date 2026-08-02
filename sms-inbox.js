@@ -3,11 +3,11 @@
 // Routes: owner (Google Voice) → commands, all others → public handler
 // Fixed: properly catches ALL incoming numbers
 
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const config = require('./config.json');
-const log = require('./logger');
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const POLL_INTERVAL = config.sms.poll_interval_ms || 30000;
 const ADMIN_NUMBER = config.owner.admin_number;
@@ -40,7 +40,6 @@ function normalizeNumber(num) {
 
 function fetchRecentSms() {
   try {
-    // Fetch last 25 messages from inbox to make sure we catch everything
     const raw = execSync(
       'termux-sms-list -l 25 -t inbox',
       { timeout: 15000, encoding: 'utf8' }
@@ -58,9 +57,6 @@ function startInbox({ onOwnerMessage, onPublicMessage }) {
   log.info('sms-inbox', 'SMS inbox started. Polling every ' + (POLL_INTERVAL / 1000) + 's');
   log.info('sms-inbox', 'Admin number: ' + ADMIN_NUMBER);
 
-  // On startup mark all current messages as seen so we don't
-  // reprocess old messages — but only if seenIds is empty
-  // This way after restart we don't lose the seen list
   if (seenIds.size === 0) {
     const initial = fetchRecentSms();
     initial.forEach(sms => seenIds.add(sms._id));
@@ -84,7 +80,6 @@ function startInbox({ onOwnerMessage, onPublicMessage }) {
     log.info('sms-inbox', newMessages.length + ' new SMS detected');
 
     for (const sms of newMessages) {
-      // Mark seen immediately to prevent double processing
       seenIds.add(sms._id);
 
       const senderNorm = normalizeNumber(sms.address);
@@ -121,4 +116,4 @@ function startInbox({ onOwnerMessage, onPublicMessage }) {
   };
 }
 
-module.exports = { startInbox };
+export { startInbox };

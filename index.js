@@ -5,22 +5,25 @@
 // Public: anyone texts 5559876543 (Google Voice)
 // All routing via Gmail IMAP IDLE
 
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
-const log = require('./logger');
-const config = require('./config.json');
-const firstRun = require('./first-run');
-const llama = require('./llama');
-const gmail = require('./gmail');
-const ownerCommand = require('./owner-command');
-const contacts = require('./contacts');
-const contactsSync = require('./contacts-sync');
-const queue = require('./queue');
-const tone = require('./tone');
-const smsRules = require('./sms-rules');
-const emailRules = require('./email-rules');
+import log from './logger.js';
+import config from './config.json' with { type: 'json' };
+import firstRun from './first-run.js';
+import * as llama from './llama.js';
+import * as gmail from './gmail.js';
+import * as ownerCommand from './owner-command.js';
+import * as contacts from './contacts.js';
+import * as contactsSync from './contacts-sync.js';
+import * as queue from './queue.js';
+import * as tone from './tone.js';
+import * as smsRules from './sms-rules.js';
+import * as emailRules from './email-rules.js';
+import * as smsInbox from './sms-inbox.js';
+import * as smsPublic from './sms-public.js';
+import * as smsSend from './sms-send.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -265,7 +268,7 @@ async function handleNewEmail(email) {
   }
 }
 
-// Graceful shutdown — no SMS
+// Graceful shutdown
 function shutdown(signal) {
   log.info('index', signal + ' received — shutting down Aigentik');
   gmail.disconnect();

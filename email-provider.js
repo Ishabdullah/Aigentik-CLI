@@ -1,0 +1,692 @@
+// email-provider.js — Aigentik Email Provider v2.0
+// Modern IMAP/SMTP implementation using imapflow and nodemailer 9.x
+// Features: async/await, auto-reconnect, exponential backoff, connection pooling,
+// structured logging, TLS validation, secure authentication
+
+import { ImapFlow } from 'imapflow';
+import nodemailer from 'nodemailer';
+import { simpleParser } from 'mailparser';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
+
+class EmailProvider {
+  constructor(options = {}) {
+    this.config = options.config || config;
+    this.logger = options.logger || log;
+
+    // IMAP connection state
+    this.imapClient = null;
+    this.isConnected = false;
+    this.isConnecting = false;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = options.maxReconnectAttempts || 10;
+    this.baseReconnectDelay = options.baseReconnectDelay || 5000; // 5 seconds
+    this.maxReconnectDelay = options.maxReconnectDelay || 300000; // 5 minutes
+
+    // IDLE state
+    this.idlePromise = null;
+    this.onNewMailCallback = null;
+    this.startupTime = new Date();
+
+    // SMTP transporter (singleton)
+    this.smtpTransporter = null;
+
+    // Connection pool for management operations
+    this.managementPool = [];
+    this.maxManagementConnections = options.maxManagementConnections || 3;
+
+    // Shutdown flag
+    this.isShuttingDown = false;
+  }
+
+  /**
+   * Get IMAP configuration with secure defaults
+   */
+  getImapConfig() {
+    return {
+      host: this.config.gmail.imap_host,
+      port: this.config.gmail.imap_port,
+      secure: true, // Use TLS
+      auth: {
+        user: this.config.gmail.email,
+        pass: this.config.gmail.app_password
+      },
+      // Security: enforce certificate validation
+      tls: {
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.2'
+      },
+      // Connection resilience
+      keepalive: {
+        interval: 30000, // Send NOOP every 30s
+        timeout: 10000
+      },
+      // Disable compression to avoid issues
+      disableCompression: true,
+      // Logger for debugging
+      logger: this.logger.debug ? (msg) => this.logger.debug('imapflow', msg) : false
+    };
+  }
+
+  /**
+   * Get SMTP transporter with secure defaults
+   */
+  getTransporter() {
+    if (!this.smtpTransporter) {
+      this.smtpTransporter = nodemailer.createTransport({
+        host: this.config.gmail.smtp_host,
+        port: this.config.gmail.smtp_port,
+        secure: this.config.gmail.smtp_port === 465, // true for 465, false for 587
+        auth: {
+          user: this.config.gmail.email,
+          pass: this.config.gmail.app_password
+        },
+        // Security: enforce certificate validation
+        tls: {
+          rejectUnauthorized: true,
+          minVersion: 'TLSv1.2'
+        },
+        // Prevent header injection
+        disableFileAccess: true,
+        disableUrlAccess: true,
+        // Connection pool
+        pool: true,
+        maxConnections: 5,
+        maxMessages: 100,
+        rateDelta: 1000,
+        rateLimit: 10
+      });
+
+      // Verify connection on startup
+      this.smtpTransporter.verify().then(() => {
+        this.logger.info('email-provider', 'SMTP connection verified');
+      }).catch((err) => {
+        this.logger.error('email-provider', 'SMTP verification failed', { error: err.message });
+      });
+    }
+    return this.smtpTransporter;
+  }
+
+  /**
+   * Calculate exponential backoff delay with jitter
+   */
+  calculateReconnectDelay(attempt) {
+    const delay = Math.min(
+      this.baseReconnectDelay * Math.pow(2, attempt),
+      this.maxReconnectDelay
+    );
+    // Add jitter (±25%)
+    const jitter = delay * 0.25 * (Math.random() * 2 - 1);
+    return Math.floor(delay + jitter);
+  }
+
+  /**
+   * Connect to IMAP server with automatic reconnection
+   */
+  async connect(onNewMailCallback) {
+    if (this.isConnecting) {
+      this.logger.warn('email-provider', 'Connection already in progress');
+      return;
+    }
+
+    if (this.isConnected && this.imapClient) {
+      this.logger.info('email-provider', 'Already connected');
+      if (onNewMailCallback) this.onNewMailCallback = onNewMailCallback;
+      return;
+    }
+
+    this.onNewMailCallback = onNewMailCallback;
+    this.isConnecting = true;
+    this.isShuttingDown = false;
+
+    while (!this.isShuttingDown) {
+      try {
+        this.logger.info('email-provider', `Connecting to IMAP as ${this.config.gmail.email}...`);
+        this.imapClient = new ImapFlow(this.getImapConfig());
+
+        // Set up event handlers
+        this.setupEventHandlers();
+
+        // Connect with timeout
+        await Promise.race([
+          this.imapClient.connect(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Connection timeout')), 30000)
+          )
+        ]);
+
+        this.isConnected = true;
+        this.isConnecting = false;
+        this.reconnectAttempts = 0;
+
+        this.logger.info('email-provider', 'IMAP connected successfully');
+
+        // Open INBOX and start IDLE
+        await this.openInboxAndWatch();
+
+        // Wait for connection to end
+        await new Promise((resolve) => {
+          this.imapClient.once('close', resolve);
+          this.imapClient.once('error', resolve);
+        });
+
+      } catch (error) {
+        this.isConnecting = false;
+        this.isConnected = false;
+
+        if (this.isShuttingDown) {
+          this.logger.info('email-provider', 'Shutdown requested, stopping reconnect attempts');
+          break;
+        }
+
+        this.reconnectAttempts++;
+        const delay = this.calculateReconnectDelay(this.reconnectAttempts - 1);
+
+        this.logger.warn('email-provider', `IMAP connection failed (attempt ${this.reconnectAttempts}), reconnecting in ${delay}ms`, {
+          error: error.message,
+          nextAttempt: this.reconnectAttempts + 1
+        });
+
+        await this.sleep(delay);
+      }
+    }
+  }
+
+  /**
+   * Set up IMAP event handlers
+   */
+  setupEventHandlers() {
+    this.imapClient.on('exists', (count) => {
+      this.logger.debug('email-provider', `Mailbox exists update: ${count} messages`);
+    });
+
+    this.imapClient.on('update', (update) => {
+      this.logger.debug('email-provider', 'Mailbox update', { update });
+    });
+
+    this.imapClient.on('expunge', (seq) => {
+      this.logger.debug('email-provider', `Message expunged: ${seq}`);
+    });
+
+    this.imapClient.on('close', () => {
+      this.logger.warn('email-provider', 'IMAP connection closed');
+      this.isConnected = false;
+    });
+
+    this.imapClient.on('error', (error) => {
+      this.logger.error('email-provider', 'IMAP error', { error: error.message });
+      this.isConnected = false;
+    });
+  }
+
+  /**
+   * Open INBOX and start IDLE monitoring
+   */
+  async openInboxAndWatch() {
+    if (!this.imapClient || !this.isConnected) {
+      throw new Error('Not connected to IMAP');
+    }
+
+    // Open INBOX read-write
+    const lock = await this.imapClient.getMailboxLock('INBOX');
+    try {
+      await this.imapClient.mailboxOpen('INBOX', { readOnly: false });
+      const mailbox = this.imapClient.mailbox;
+      this.logger.info('email-provider', `INBOX opened. ${mailbox.exists} total messages.`);
+
+      // Start IDLE loop
+      this.idlePromise = this.idleLoop();
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * IDLE loop with automatic restart on failure
+   */
+  async idleLoop() {
+    while (this.isConnected && !this.isShuttingDown) {
+      try {
+        this.logger.debug('email-provider', 'Starting IDLE...');
+        await this.imapClient.idle();
+        this.logger.debug('email-provider', 'IDLE ended normally');
+      } catch (error) {
+        if (!this.isShuttingDown) {
+          this.logger.error('email-provider', 'IDLE error', { error: error.message });
+          // Brief pause before retry
+          await this.sleep(5000);
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle new mail notification from IDLE
+   */
+  async handleNewMail() {
+    if (!this.onNewMailCallback) return;
+
+    try {
+      // Search for unseen messages since startup
+      const sinceDate = this.startupTime.toISOString().split('T')[0]; // YYYY-MM-DD
+      const messages = await this.imapClient.fetch(
+        { unseen: true, since: sinceDate },
+        { source: true, uid: true }
+      );
+
+      for (const msg of messages) {
+        try {
+          const email = await this.parseMessage(msg.source);
+          
+          // Double-check email is newer than startup time
+          const emailDate = new Date(email.date);
+          if (emailDate < this.startupTime) {
+            this.logger.debug('email-provider', `Skipping old email from ${email.from_email}`);
+            continue;
+          }
+
+          this.logger.info('email-provider', `Processing new email from ${email.from_email}`, {
+            subject: email.subject,
+            uid: msg.uid
+          });
+
+          // Mark as seen
+          await this.imapClient.messageFlagsAdd(msg.uid, ['\\Seen']);
+
+          // Callback to application
+          await this.onNewMailCallback(email);
+
+        } catch (error) {
+          this.logger.error('email-provider', 'Failed to process email', {
+            error: error.message,
+            uid: msg.uid
+          });
+        }
+      }
+    } catch (error) {
+      this.logger.error('email-provider', 'Failed to fetch new mail', { error: error.message });
+    }
+  }
+
+  /**
+   * Parse raw email message using mailparser
+   */
+  async parseMessage(source) {
+    const parsed = await simpleParser(source);
+    return {
+      from: parsed.from?.text || '',
+      from_email: parsed.from?.value?.[0]?.address || '',
+      from_name: parsed.from?.value?.[0]?.name || '',
+      to: parsed.to?.text || '',
+      subject: parsed.subject || '(no subject)',
+      body: parsed.text || parsed.html || '',
+      date: parsed.date || new Date(),
+      message_id: parsed.messageId || ''
+    };
+  }
+
+  /**
+   * Get a management connection from pool or create new one
+   */
+  async getManagementConnection() {
+    // Try to reuse an existing connection
+    for (let i = this.managementPool.length - 1; i >= 0; i--) {
+      const client = this.managementPool[i];
+      if (client && client.usable) {
+        this.managementPool.splice(i, 1);
+        return client;
+      }
+    }
+
+    // Create new connection
+    const client = new ImapFlow(this.getImapConfig());
+    await client.connect();
+    return client;
+  }
+
+  /**
+   * Release management connection back to pool
+   */
+  async releaseManagementConnection(client) {
+    if (this.managementPool.length < this.maxManagementConnections && client.usable) {
+      this.managementPool.push(client);
+    } else {
+      try {
+        await client.logout();
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
+   * Execute a management operation with its own connection
+   */
+  async withManagementConnection(operation) {
+    const client = await this.getManagementConnection();
+    try {
+      return await operation(client);
+    } finally {
+      await this.releaseManagementConnection(client);
+    }
+  }
+
+  /**
+   * Search emails by criteria
+   */
+  async searchEmails(criteria) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: true });
+      const uids = await client.search(criteria);
+      return uids || [];
+    });
+  }
+
+  /**
+   * Delete emails permanently (move to Trash)
+   */
+  async deleteEmails(criteria) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search(criteria);
+      if (!uids.length) return { deleted: 0 };
+
+      await client.messageMove(uids, '[Gmail]/Trash');
+      this.logger.action('email-provider', `Deleted ${uids.length} email(s)`);
+      return { deleted: uids.length };
+    });
+  }
+
+  /**
+   * Archive emails (move to All Mail)
+   */
+  async archiveEmails(criteria) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search(criteria);
+      if (!uids.length) return { archived: 0 };
+
+      await client.messageMove(uids, '[Gmail]/All Mail');
+      this.logger.action('email-provider', `Archived ${uids.length} email(s)`);
+      return { archived: uids.length };
+    });
+  }
+
+  /**
+   * Mark emails as spam
+   */
+  async markAsSpam(criteria) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search(criteria);
+      if (!uids.length) return { spam: 0 };
+
+      await client.messageMove(uids, '[Gmail]/Spam');
+      this.logger.action('email-provider', `Marked ${uids.length} email(s) as spam`);
+      return { spam: uids.length };
+    });
+  }
+
+  /**
+   * Mark emails as read
+   */
+  async markAsRead(criteria) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search(criteria);
+      if (!uids.length) return { marked: 0 };
+
+      await client.messageFlagsAdd(uids, ['\\Seen']);
+      this.logger.action('email-provider', `Marked ${uids.length} email(s) as read`);
+      return { marked: uids.length };
+    });
+  }
+
+  /**
+   * Mark emails as unread
+   */
+  async markAsUnread(criteria) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search(criteria);
+      if (!uids.length) return { marked: 0 };
+
+      await client.messageFlagsRemove(uids, ['\\Seen']);
+      this.logger.action('email-provider', `Marked ${uids.length} email(s) as unread`);
+      return { marked: uids.length };
+    });
+  }
+
+  /**
+   * Add a label to emails
+   */
+  async labelEmails(criteria, labelName) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search(criteria);
+      if (!uids.length) return { labeled: 0 };
+
+      // Gmail uses labels as flags
+      await client.messageFlagsAdd(uids, [labelName]);
+      this.logger.action('email-provider', `Labeled ${uids.length} email(s) as "${labelName}"`);
+      return { labeled: uids.length };
+    });
+  }
+
+  /**
+   * Mark all current inbox emails as seen
+   */
+  async markAllAsSeen() {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      const uids = await client.search({ unseen: true });
+      if (!uids.length) return { marked: 0 };
+
+      await client.messageFlagsAdd(uids, ['\\Seen']);
+      this.logger.action('email-provider', `Marked all ${uids.length} emails as seen`);
+      return { marked: uids.length };
+    });
+  }
+
+  /**
+   * Send email reply
+   */
+  async sendReply(toEmail, originalSubject, body) {
+    const subject = originalSubject.startsWith('Re:') ? originalSubject : `Re: ${originalSubject}`;
+    return this.sendEmail(toEmail, subject, body, true);
+  }
+
+  /**
+   * Send new email
+   */
+  async sendEmail(toEmail, subject, body, isReply = false) {
+    const transporter = this.getTransporter();
+    const fromName = this.config.aigentik_name || 'Aigentik';
+
+    try {
+      const info = await transporter.sendMail({
+        from: `${fromName} <${this.config.gmail.email}>`,
+        to: toEmail,
+        subject,
+        text: body,
+        // Security headers
+        headers: {
+          'X-Auto-Response-Suppress': 'OOF, AutoReply',
+          'X-Priority': '3',
+          'X-MSMail-Priority': 'Normal'
+        }
+      });
+
+      this.logger.action('email-provider', `${isReply ? 'Reply' : 'Email'} sent to ${toEmail}`, {
+        subject,
+        messageId: info.messageId
+      });
+      return true;
+    } catch (error) {
+      this.logger.error('email-provider', `Failed to send ${isReply ? 'reply' : 'email'} to ${toEmail}`, {
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Send notification to owner via email
+   */
+  async sendOwnerNotification(message) {
+    const transporter = this.getTransporter();
+    try {
+      await transporter.sendMail({
+        from: this.config.gmail.email,
+        to: this.config.gmail.email,
+        subject: 'Aigentik Notification',
+        text: message
+      });
+      this.logger.info('email-provider', 'Owner notification sent via email');
+      return true;
+    } catch (error) {
+      this.logger.error('email-provider', 'Failed to send owner notification', {
+        error: error.message
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Check if email is a Google Voice forwarded text
+   */
+  isGoogleVoiceText(email) {
+    return email.subject?.startsWith('New text message from') ||
+           email.subject?.startsWith('New group text message');
+  }
+
+  /**
+   * Parse Google Voice forwarded email into SMS-like object
+   */
+  parseGoogleVoiceEmail(email) {
+    // Match both "New text message from" and "New group text message from"
+    const subjectMatch = email.subject?.match(
+      /New (?:group )?text message from (.+?)\s*\((\d{3})\)\s*(\d{3})-(\d{4})/
+    );
+
+    let senderName = null;
+    let senderPhone = null;
+
+    if (subjectMatch) {
+      senderName = subjectMatch[1].trim();
+      senderPhone = subjectMatch[2] + subjectMatch[3] + subjectMatch[4];
+    }
+
+    let body = email.body || '';
+    const footerIdx = body.indexOf('To respond to this text message');
+    if (footerIdx !== -1) {
+      body = body.substring(0, footerIdx).trim();
+    }
+    body = body.replace(/<[^>]*>/g, '').trim();
+
+    return {
+      type: 'google_voice',
+      sender_name: senderName,
+      sender_phone: senderPhone,
+      sender_email: email.from_email,
+      reply_to_email: email.from_email,
+      body: body,
+      original_subject: email.subject,
+      original_email: email
+    };
+  }
+
+  /**
+   * Reply to a Google Voice forwarded text
+   */
+  async replyToGoogleVoiceText(voiceMessage, replyText) {
+    const transporter = this.getTransporter();
+    try {
+      await transporter.sendMail({
+        from: this.config.gmail.email,
+        to: voiceMessage.reply_to_email,
+        subject: 'Re: ' + voiceMessage.original_subject,
+        text: replyText
+      });
+      this.logger.action('email-provider', 'Google Voice reply sent', {
+        to: voiceMessage.sender_name
+      });
+      return true;
+    } catch (error) {
+      this.logger.error('email-provider', 'Failed to send Google Voice reply', {
+        error: error.message
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Graceful disconnect
+   */
+  async disconnect() {
+    this.logger.info('email-provider', 'Disconnecting...');
+    this.isShuttingDown = true;
+
+    // Stop IDLE
+    if (this.idlePromise) {
+      try {
+        await this.imapClient?.idleDone();
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // Close main connection
+    if (this.imapClient) {
+      try {
+        await this.imapClient.logout();
+      } catch (e) {
+        this.logger.warn('email-provider', 'Error closing main IMAP connection', { error: e.message });
+      }
+      this.imapClient = null;
+    }
+
+    // Close management pool connections
+    for (const client of this.managementPool) {
+      try {
+        await client.logout();
+      } catch (e) {
+        // Ignore
+      }
+    }
+    this.managementPool = [];
+
+    // Close SMTP transporter
+    if (this.smtpTransporter) {
+      this.smtpTransporter.close();
+      this.smtpTransporter = null;
+    }
+
+    this.isConnected = false;
+    this.logger.info('email-provider', 'Disconnected successfully');
+  }
+
+  /**
+   * Utility: sleep for specified milliseconds
+   */
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
+// Export singleton instance
+let emailProviderInstance = null;
+
+export function getEmailProvider(options) {
+  if (!emailProviderInstance) {
+    emailProviderInstance = new EmailProvider(options);
+  }
+  return emailProviderInstance;
+}
+
+export function resetEmailProvider() {
+  emailProviderInstance = null;
+}
+
+export { EmailProvider };
+export default EmailProvider;

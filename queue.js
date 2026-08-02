@@ -1,10 +1,10 @@
 // queue.js — Aigentik pending review queue
 // Holds emails and SMS waiting for owner approval
 
-const fs = require('fs');
-const path = require('path');
-const config = require('./config.json');
-const log = require('./logger');
+import fs from 'fs';
+import path from 'path';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const QUEUE_FILE = path.join(config.paths.data_dir, 'pending.json');
 
@@ -28,7 +28,6 @@ function saveQueue(queue) {
 }
 
 function generateItemId(queue) {
-  // Use simple incrementing display number (1, 2, 3...)
   const max = queue.reduce((m, i) => Math.max(m, i.display_id || 0), 0);
   return max + 1;
 }
@@ -40,7 +39,7 @@ function addToQueue({ type, sender, senderName, subject, body, draftReply, conta
 
   const item = {
     display_id: displayId,
-    type,              // 'email' or 'sms'
+    type,
     sender,
     sender_name: senderName || null,
     subject: subject || null,
@@ -122,7 +121,7 @@ function formatItemForSms(item) {
   ].filter(Boolean).join('\n');
 }
 
-module.exports = {
+export {
   addToQueue,
   getItem,
   removeItem,
@@ -131,4 +130,3 @@ module.exports = {
   formatQueueForSms,
   formatItemForSms
 };
-

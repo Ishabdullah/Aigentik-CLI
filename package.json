@@ -1,17 +1,24 @@
 {
   "name": "aigentik",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Aigentik — Local AI assistant for email and SMS management",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.mjs --coverage"
   },
   "dependencies": {
-    "node-imap": "^0.9.6",
-    "nodemailer": "^6.9.9",
-    "mailparser": "^3.6.6",
-    "node-fetch": "^2.7.0"
+    "imapflow": "^1.0.172",
+    "mailparser": "^3.9.14",
+    "nodemailer": "^9.0.3"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
   },
   "author": "Aigentik",
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

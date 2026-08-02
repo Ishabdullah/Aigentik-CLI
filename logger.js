@@ -1,7 +1,7 @@
 // logger.js — Aigentik logging system
-const fs = require('fs');
-const path = require('path');
-const config = require('./config.json');
+import fs from 'fs';
+import path from 'path';
+import config from './config.json' with { type: 'json' };
 
 const logsDir = config.paths.logs_dir;
 
@@ -25,10 +25,12 @@ function writeLog(level, category, message, data) {
   try { fs.appendFileSync(getLogFile(), line + '\n'); } catch (e) {}
 }
 
-module.exports = {
+const log = {
   info:   (c, m, d) => writeLog('INFO',   c, m, d),
   warn:   (c, m, d) => writeLog('WARN',   c, m, d),
   error:  (c, m, d) => writeLog('ERROR',  c, m, d),
   debug:  (c, m, d) => writeLog('DEBUG',  c, m, d),
   action: (c, m, d) => writeLog('ACTION', c, m, d)
 };
+
+export default log;

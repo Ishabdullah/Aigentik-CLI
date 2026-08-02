@@ -2,11 +2,11 @@
 // Pulls real phone contacts via termux-contact-list
 // Merges into Aigentik contacts.json without overwriting existing data
 
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const config = require('./config.json');
-const log = require('./logger');
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const CONTACTS_FILE = path.join(config.paths.data_dir, 'contacts.json');
 
@@ -45,7 +45,6 @@ function fetchAndroidContacts() {
       encoding: 'utf8'
     });
     const parsed = JSON.parse(raw);
-    // Filter out entries with no valid phone number
     return parsed.filter(c => c.name && c.number);
   } catch (e) {
     log.error('contacts-sync', 'Failed to fetch Android contacts', { error: e.message });
@@ -71,13 +70,11 @@ function syncContacts() {
     const normPhone = normalizePhone(ac.number);
     if (!normPhone) continue;
 
-    // Check if contact already exists by phone number
     const existingIdx = aigentikContacts.findIndex(c =>
       c.phones?.some(p => normalizePhone(p) === normPhone)
     );
 
     if (existingIdx === -1) {
-      // New contact — add it
       aigentikContacts.push({
         id: generateId(aigentikContacts),
         name: ac.name,
@@ -97,16 +94,13 @@ function syncContacts() {
       });
       added++;
     } else {
-      // Existing contact — update name if missing, add phone if new
       const existing = aigentikContacts[existingIdx];
 
-      // Only update name if contact has no name yet
       if (!existing.name) {
         aigentikContacts[existingIdx].name = ac.name;
         updated++;
       }
 
-      // Add alias for name matching if not already there
       const nameLower = ac.name.toLowerCase();
       if (!existing.aliases?.includes(nameLower)) {
         if (!aigentikContacts[existingIdx].aliases) {
@@ -116,7 +110,6 @@ function syncContacts() {
         updated++;
       }
 
-      // Mark source as android_contacts if it was auto-created
       if (existing.source === 'auto' || existing.source === 'sms') {
         aigentikContacts[existingIdx].source = 'android_contacts';
       }
@@ -144,4 +137,4 @@ function startAutoSync() {
   return result;
 }
 
-module.exports = { syncContacts, startAutoSync };
+export { syncContacts, startAutoSync };

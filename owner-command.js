@@ -2,20 +2,22 @@
 // Interprets messages from Google Voice number as natural language commands
 // Executes actions and replies back to owner via SMS
 
-const config = require('./config.json');
-const log = require('./logger');
-const llama = require('./llama');
-const queue = require('./queue');
-const emailRules = require('./email-rules');
-const contacts = require('./contacts');
-const fs = require('fs');
-const path = require('path');
-const contactsSync = require('./contacts-sync');
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
+import * as llama from './llama.js';
+import * as queue from './queue.js';
+import * as emailRules from './email-rules.js';
+import * as contacts from './contacts.js';
+import fs from 'fs';
+import path from 'path';
+import * as contactsSync from './contacts-sync.js';
+import * as smsSend from './sms-send.js';
+
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
 // Pending confirmations for destructive actions
 const pendingConfirmations = new Map();
-const gmail = require('./gmail');
+
 function getAigentikName() {
   try {
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
@@ -25,8 +27,8 @@ function getAigentikName() {
 
 async function reply(message) {
   try {
-    const gmail = require('./gmail');
-    await gmail.sendOwnerNotification(message);
+    const { sendOwnerNotification } = await import('./gmail.js');
+    await sendOwnerNotification(message);
   } catch (e) {
     log.error('owner-command', 'Failed to reply to owner', { error: e.message });
   }
@@ -68,7 +70,6 @@ async function handleOwnerCommand(sms) {
       reply('❌ Action cancelled.');
       return;
     }
-    // If not yes/no, treat as a new command and clear pending
     pendingConfirmations.delete('pending');
   }
 
@@ -104,6 +105,7 @@ async function handleOwnerCommand(sms) {
 
   // List SMS rules
   if (lower === 'sms rules' || lower === 'list sms rules') {
+    const smsRules = await import('./sms-rules.js');
     reply(smsRules.listRulesForSms());
     return;
   }
@@ -116,7 +118,6 @@ async function handleOwnerCommand(sms) {
   }
 
   // Direct SMS shorthand — "text [name/number] [message]"
-  // Most reliable path — no AI interpretation needed
   if (lower.startsWith('text ') || lower.startsWith('sms ') || lower.startsWith('message ')) {
     const words = text.split(' ');
     const target = words[1];
@@ -127,15 +128,12 @@ async function handleOwnerCommand(sms) {
       return;
     }
 
-    // Look up contact
     let toNumber = null;
     let toName = target;
 
-    // Check if it looks like a phone number
     if (/^[\d\+\-\(\)]{7,}$/.test(target)) {
       toNumber = target;
     } else {
-      // Search contacts by name or relationship
       const allMatches = contacts.findAllByName(target);
       const exactMatch = contacts.findContact(target) ||
                          contacts.findByRelationship(target);
@@ -160,7 +158,6 @@ async function handleOwnerCommand(sms) {
       return;
     }
 
-    // Generate natural message using AI or send as-is
     let finalMessage = msgBody;
     try {
       const ownerName = getAigentikName();
@@ -170,7 +167,6 @@ async function handleOwnerCommand(sms) {
       ], 150);
       finalMessage = generated;
     } catch (e) {
-      // If AI fails just send the raw message
       log.warn('owner-command', 'AI message generation failed, sending raw', { error: e.message });
     }
 
@@ -199,8 +195,8 @@ async function handleOwnerCommand(sms) {
       reply('✍️ Generating email to ' + (exactMatch.name || target) + ' about "' + topic + '"...');
       const content = await llama.generateContent(topic, 'email', 'To: ' + (exactMatch.name || target));
       const subject = topic.charAt(0).toUpperCase() + topic.slice(1);
-      const gmail = require('./gmail');
-      await gmail.sendEmail(exactMatch.emails[0], subject, content);
+      const { sendEmail } = await import('./gmail.js');
+      await sendEmail(exactMatch.emails[0], subject, content);
       reply('✅ Email sent to ' + (exactMatch.name || target) + ' (' + exactMatch.emails[0] + ')\nSubject: ' + subject);
     } catch (e) {
       reply('❌ Failed to send email: ' + e.message);
@@ -216,7 +212,6 @@ async function handleOwnerCommand(sms) {
 
   // --- Use AI to interpret everything else ---
   try {
-    // Build context for better command interpretation
     const pendingCount = queue.listQueue().length;
     const context = {
       aigentik_name: name,
@@ -237,10 +232,8 @@ async function handleOwnerCommand(sms) {
 
 // Execute an interpreted command object
 async function executeInterpretedCommand(cmd, originalText, name) {
-
-  // NOTE: gmail module imported here to avoid circular dependencies
   let gmail;
-  try { gmail = require('./gmail'); } catch (e) {}
+  try { gmail = await import('./gmail.js'); } catch (e) {}
 
   switch (cmd.action) {
     case 'delete_all_emails': {
@@ -292,7 +285,6 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       pendingConfirmations.set('pending', {
         execute: async () => {
           try {
-            // Archive everything — safest bulk clean
             const result = await gmail.archiveEmails(['ALL']);
             reply(`✅ Inbox cleaned! Archived ${result.archived} email(s). Your inbox is now empty.`);
           } catch (e) {
@@ -366,7 +358,6 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       const desc = cmd.rule_description || cmd.content;
       if (!desc) { reply('Describe the rule. e.g. "add email rule: auto-reply to anything from FedEx"'); break; }
 
-      // Use AI to parse the rule description into structured form
       const rulePrompt = `Parse this rule description into JSON:
 "${desc}"
 Return: {"condition_type": "from|subject_contains|body_contains|domain|message_contains|any", "condition_value": "value to match", "action": "auto-reply|review|spam"}
@@ -376,6 +367,7 @@ Return ONLY JSON.`;
       try {
         const ruleData = JSON.parse(parsed.replace(/```json|```/g, '').trim());
         if (ruleType === 'sms') {
+          const smsRules = await import('./sms-rules.js');
           smsRules.addRule({ description: desc, ...ruleData, added_by: 'owner' });
         } else {
           emailRules.addRule({ description: desc, ...ruleData, added_by: 'owner' });
@@ -391,7 +383,10 @@ Return ONLY JSON.`;
       const type = cmd.rule_type || 'both';
       let msg = '';
       if (type === 'email' || type === 'both') msg += emailRules.listRulesForSms() + '\n\n';
-      if (type === 'sms' || type === 'both') msg += smsRules.listRulesForSms();
+      if (type === 'sms' || type === 'both') {
+        const smsRules = await import('./sms-rules.js');
+        msg += smsRules.listRulesForSms();
+      }
       reply(msg.trim());
       break;
     }
@@ -401,7 +396,6 @@ Return ONLY JSON.`;
       let toEmail = null;
       let toName = cmd.target;
 
-      // Look up target in contacts
       if (cmd.target) {
         const contact = contacts.findContact(cmd.target) ||
                         contacts.findByRelationship(cmd.target);
@@ -416,7 +410,6 @@ Return ONLY JSON.`;
         break;
       }
 
-      // Generate the email content
       const content = await llama.generateContent(cmd.content, 'email', `To: ${toName}`);
       const subject = `Re: ${cmd.content?.substring(0, 50) || 'Message from your assistant'}`;
 
@@ -537,7 +530,6 @@ Return ONLY JSON.`;
       const searchTerm = cmd.target;
       if (!searchTerm) { reply('Who are you looking for?'); break; }
 
-      // First try exact match
       const exactMatch = contacts.findContact(searchTerm) ||
                          contacts.findByRelationship(searchTerm);
 
@@ -546,7 +538,6 @@ Return ONLY JSON.`;
         break;
       }
 
-      // Try multi-match for disambiguation
       const allMatches = contacts.findAllByName(searchTerm);
 
       if (allMatches.length === 0) {
@@ -559,7 +550,6 @@ Return ONLY JSON.`;
         break;
       }
 
-      // Multiple matches — ask owner to clarify
       const names = allMatches.map((c, i) => (i + 1) + '. ' + (c.name || c.phones?.[0] || c.id)).join('\n');
       reply('Found ' + allMatches.length + ' contacts named "' + searchTerm + '":\n\n' + names + '\n\nWhich one? Reply with the full name.');
       break;
@@ -584,7 +574,6 @@ Return ONLY JSON.`;
 
     case 'unknown':
     default:
-      // Last resort — ask AI to respond conversationally
       try {
         const response = await llama.chat([
           {
@@ -601,5 +590,4 @@ Return ONLY JSON.`;
   }
 }
 
-module.exports = { handleOwnerCommand };
-
+export { handleOwnerCommand };

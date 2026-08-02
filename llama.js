@@ -1,19 +1,11 @@
 // llama.js — Aigentik AI communication layer
-const config = require('./config.json');
-const log = require('./logger');
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const LLAMA_URL = `${config.llama.host}/v1/chat/completions`;
 const MODEL = config.llama.model;
 const MAX_TOKENS = config.llama.max_tokens;
 const TEMPERATURE = config.llama.temperature;
-
-let fetch;
-try {
-  fetch = require('node-fetch');
-} catch (e) {
-  console.error('node-fetch not installed. Run: npm install node-fetch@2');
-  process.exit(1);
-}
 
 async function chat(messages, maxTokens = MAX_TOKENS) {
   try {
@@ -21,7 +13,7 @@ async function chat(messages, maxTokens = MAX_TOKENS) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: MODEL, messages, max_tokens: maxTokens, temperature: TEMPERATURE }),
-      timeout: 180000
+      signal: AbortSignal.timeout(180000)
     });
     if (!response.ok) throw new Error(`llama-server returned ${response.status}`);
     const data = await response.json();
@@ -161,4 +153,4 @@ async function warmUp() {
   }
 }
 
-module.exports = { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, detectTone, generateContent, chat };
+export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, detectTone, generateContent, chat };

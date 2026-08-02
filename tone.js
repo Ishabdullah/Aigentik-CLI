@@ -1,8 +1,8 @@
 // tone.js — Aigentik tone detection and matching
 // Detects the tone of incoming messages and passes to llama for matched replies
 
-const llama = require('./llama');
-const log = require('./logger');
+import * as llama from './llama.js';
+import log from './logger.js';
 
 const VALID_TONES = ['formal', 'casual', 'urgent', 'friendly', 'aggressive', 'neutral', 'professional'];
 
@@ -33,5 +33,4 @@ function getToneInstruction(tone) {
   return instructions[tone] || instructions.neutral;
 }
 
-module.exports = { detectTone, getToneInstruction, VALID_TONES };
-
+export { detectTone, getToneInstruction, VALID_TONES };

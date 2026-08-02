@@ -2,10 +2,10 @@
 // Checks incoming SMS against saved rules
 // Returns: auto-reply, review, spam, or no-match
 
-const fs = require('fs');
-const path = require('path');
-const config = require('./config.json');
-const log = require('./logger');
+import fs from 'fs';
+import path from 'path';
+import config from './config.json' with { type: 'json' };
+import log from './logger.js';
 
 const RULES_FILE = path.join(config.paths.data_dir, 'sms-rules.json');
 
@@ -33,14 +33,14 @@ function addRule({ description, condition_type, condition_value, action, added_b
   const rule = {
     id: `sr_${Date.now()}`,
     description,
-    condition_type,   // 'from_number', 'message_contains', 'any'
-    condition_value,
-    action,           // 'auto-reply', 'review', 'spam'
+    condition_type,
+    condition_value: condition_value || '',
+    action,
     added_by: added_by || 'owner',
     created_at: new Date().toISOString(),
     match_count: 0
   };
-  rules.push(rule);
+  rules.unshift(rule);
   saveRules(rules);
   log.info('sms-rules', `Rule added: ${description}`, { action });
   return rule;
@@ -49,7 +49,8 @@ function addRule({ description, condition_type, condition_value, action, added_b
 function removeRule(identifier) {
   const rules = loadRules();
   const idx = rules.findIndex(r =>
-    r.id === identifier || r.description.toLowerCase().includes(identifier.toLowerCase())
+    r.id === identifier ||
+    r.description.toLowerCase().includes(identifier.toLowerCase())
   );
   if (idx === -1) return false;
   const removed = rules.splice(idx, 1)[0];
@@ -112,5 +113,4 @@ function listRulesForSms() {
   return lines.join('\n');
 }
 
-module.exports = { addRule, removeRule, checkRules, listRulesForSms, loadRules };
-
+export { addRule, removeRule, checkRules, listRulesForSms, loadRules };

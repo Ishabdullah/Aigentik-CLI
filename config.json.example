@@ -1,13 +1,13 @@
 {
   "owner": {
-    "admin_number": "15551234567",
+    "admin_number": "15551234567",           // Your Phone number (admin)
     "admin_number_formatted": "+15551234567",
-    "aigentik_number": "15559876543",
+    "aigentik_number": "15559876543",        // Public Google Voice number
     "aigentik_number_formatted": "+15559876543"
   },
   "gmail": {
     "email": "your@gmail.com",
-    "app_password": "xxxx xxxx xxxx xxxx",
+    "app_password": "xxxx xxxx xxxx xxxx",   // Gmail App Password (16 chars)
     "imap_host": "imap.gmail.com",
     "imap_port": 993,
     "smtp_host": "smtp.gmail.com",
@@ -33,6 +33,7 @@
     "pause_sms": false,
     "require_confirmation_for_destructive": true,
     "default_unmatched_action": "auto-reply",
+    "default_unmatched_sms_action": "review",
     "tone_matching": true
   },
   "paths": {
