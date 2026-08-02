@@ -150,6 +150,33 @@ const DAY_NAME_TO_KEY = {
 };
 const DAY_ORDER = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
+// Shared by parseWorkingHoursPhrase and parseDayOffPhrase: pull day names
+// out of a lowercased phrase, expanding "weekday(s)"/"weekend(s)" and
+// "X through/to Y" ranges, falling back to a plain substring scan.
+function extractDaysFromPhrase(lower) {
+  if (/weekday/.test(lower)) return ['mon', 'tue', 'wed', 'thu', 'fri'];
+  if (/weekend/.test(lower)) return ['sat', 'sun'];
+
+  const dayNamesPattern = Object.keys(DAY_NAME_TO_KEY).sort((a, b) => b.length - a.length).join('|');
+  const dayRangeRegex = new RegExp(`\\b(${dayNamesPattern})\\b\\s*(?:through|to|-)\\s*\\b(${dayNamesPattern})\\b`);
+  const rangeMatch = lower.match(dayRangeRegex);
+  if (rangeMatch && DAY_NAME_TO_KEY[rangeMatch[1]] && DAY_NAME_TO_KEY[rangeMatch[2]]) {
+    const days = [];
+    const startIdx = DAY_ORDER.indexOf(DAY_NAME_TO_KEY[rangeMatch[1]]);
+    const endIdx = DAY_ORDER.indexOf(DAY_NAME_TO_KEY[rangeMatch[2]]);
+    for (let i = startIdx; ; i = (i + 1) % 7) {
+      days.push(DAY_ORDER[i]);
+      if (i === endIdx) break;
+    }
+    return days;
+  }
+
+  const days = Object.keys(DAY_NAME_TO_KEY)
+    .filter(name => lower.includes(name))
+    .map(name => DAY_NAME_TO_KEY[name]);
+  return [...new Set(days)];
+}
+
 // Turn a phrase like "9am to 5pm monday through friday" into
 // { days: ['mon','tue',...], start: 'HH:MM', end: 'HH:MM' }, or null if it
 // can't be parsed. Handled deterministically (not by the LLM) since it's a
@@ -179,32 +206,24 @@ function parseWorkingHoursPhrase(phrase) {
   const start = to24h(sh, sm, sMer, startMeridiem);
   const end = to24h(eh, em, eMer, endMeridiem);
 
-  let days = [];
-  if (/weekday/.test(lower)) {
-    days = ['mon', 'tue', 'wed', 'thu', 'fri'];
-  } else if (/weekend/.test(lower)) {
-    days = ['sat', 'sun'];
-  } else {
-    const dayNamesPattern = Object.keys(DAY_NAME_TO_KEY).sort((a, b) => b.length - a.length).join('|');
-    const dayRangeRegex = new RegExp(`\\b(${dayNamesPattern})\\b\\s*(?:through|to|-)\\s*\\b(${dayNamesPattern})\\b`);
-    const rangeMatch = lower.match(dayRangeRegex);
-    if (rangeMatch && DAY_NAME_TO_KEY[rangeMatch[1]] && DAY_NAME_TO_KEY[rangeMatch[2]]) {
-      const startIdx = DAY_ORDER.indexOf(DAY_NAME_TO_KEY[rangeMatch[1]]);
-      const endIdx = DAY_ORDER.indexOf(DAY_NAME_TO_KEY[rangeMatch[2]]);
-      for (let i = startIdx; ; i = (i + 1) % 7) {
-        days.push(DAY_ORDER[i]);
-        if (i === endIdx) break;
-      }
-    } else {
-      days = Object.keys(DAY_NAME_TO_KEY)
-        .filter(name => lower.includes(name))
-        .map(name => DAY_NAME_TO_KEY[name]);
-      days = [...new Set(days)];
-    }
-  }
-
+  const days = extractDaysFromPhrase(lower);
   if (days.length === 0) return null;
   return { days, start, end };
+}
+
+// Turn a phrase like "I don't work on Sundays" / "closed on weekends" /
+// "no appointments on Saturday" into a list of day keys to mark off, or
+// null if no such phrase is recognized. Only tried after
+// parseWorkingHoursPhrase fails to find a time range, so it's specifically
+// for "day off" statements, not hours statements.
+const DAY_OFF_KEYWORDS = /\b(don'?t work|do not work|not working|off|closed|no appointments|no work|unavailable|not available)\b/i;
+function parseDayOffPhrase(phrase) {
+  if (!phrase) return null;
+  const lower = phrase.toLowerCase();
+  if (!DAY_OFF_KEYWORDS.test(lower)) return null;
+
+  const days = extractDaysFromPhrase(lower);
+  return days.length > 0 ? days : null;
 }
 
 // Does a raw scheduling phrase explicitly ask for today? Used to gate
@@ -313,6 +332,28 @@ function findNextAvailableSlot({ afterDate, durationMinutes, preferredDate, excl
   return null; // fully booked for the entire window — extremely unlikely
 }
 
+// Generate up to `count` non-overlapping open slots — used to offer a
+// customer a few options rather than picking one for them. Each subsequent
+// search starts right after the previous offer ends, so they never collide
+// with each other even though none of them are booked yet.
+function generateOfferSlots({ durationMinutes, preferredDate, afterDate, count = 3 } = {}) {
+  const offers = [];
+  let cursor = afterDate;
+  let firstPreferred = preferredDate;
+  for (let i = 0; i < count; i++) {
+    const slot = findNextAvailableSlot({ afterDate: cursor, durationMinutes, preferredDate: firstPreferred });
+    if (!slot) break;
+    offers.push(slot);
+    cursor = new Date(slot.end.getTime() + 15 * 60 * 1000);
+    firstPreferred = null; // only honor the original preference for the first offer
+  }
+  return offers;
+}
+
+function formatOfferList(offers) {
+  return offers.map((s, i) => `${i + 1}. ${new Date(s.start).toLocaleString()}`).join('\n');
+}
+
 // ─── Appointments ───────────────────────────────────────────────────────────
 
 function createAppointment({ title, start, end, contactId, attendeeName, attendeeEmail, createdVia, notes }) {
@@ -331,6 +372,7 @@ function createAppointment({ title, start, end, contactId, attendeeName, attende
     attendee_email: attendeeEmail || null,
     status: 'confirmed',
     rsvp_status: 'pending', // updated when the attendee accepts/declines via their calendar app
+    pending_reschedule: null, // set when a reschedule request is awaiting the other party's confirmation
     created_via: createdVia || 'owner',
     notes: notes || null,
     created_at: new Date().toISOString(),
@@ -342,6 +384,106 @@ function createAppointment({ title, start, end, contactId, attendeeName, attende
   saveCalendar(appointments);
   log.action('calendar', `Appointment created: ${appointment.title}`, { id, start: appointment.start });
   return appointment;
+}
+
+// ─── Negotiation (offer/counter-offer before a booking is confirmed) ──────
+// Used for inbound requests from customers/contacts: Aigentik never books
+// unilaterally when the exact requested/offered time isn't free — it
+// proposes and waits for the other party to agree, rather than silently
+// substituting a different time.
+
+function proposeAppointment({ title, contactId, attendeeName, attendeeEmail, createdVia, offeredSlots }) {
+  const appointments = loadCalendar();
+  const id = generateAppointmentId(appointments);
+  const primary = offeredSlots[0];
+
+  const appointment = {
+    id,
+    uid: `${id}@aigentik.local`,
+    ics_sequence: 0,
+    title: title || `Appointment with ${attendeeName || attendeeEmail || 'contact'}`,
+    start: new Date(primary.start).toISOString(),
+    end: new Date(primary.end).toISOString(),
+    contact_id: contactId || null,
+    attendee_name: attendeeName || null,
+    attendee_email: attendeeEmail || null,
+    status: 'negotiating',
+    rsvp_status: 'pending',
+    pending_reschedule: null,
+    offered_slots: offeredSlots.map(s => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() })),
+    created_via: createdVia || 'owner',
+    notes: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    history: [{ event: 'proposed', at: new Date().toISOString() }]
+  };
+
+  appointments.push(appointment);
+  saveCalendar(appointments);
+  log.action('calendar', `Appointment proposed: ${appointment.title}`, { id });
+  return appointment;
+}
+
+function updateNegotiationOffers(id, offeredSlots) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  const iso = offeredSlots.map(s => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() }));
+  appointments[idx].offered_slots = iso;
+  appointments[idx].start = iso[0].start;
+  appointments[idx].end = iso[0].end;
+  appointments[idx].updated_at = new Date().toISOString();
+  appointments[idx].history.push({ event: 'counter_offered', at: appointments[idx].updated_at });
+
+  saveCalendar(appointments);
+  return appointments[idx];
+}
+
+function confirmNegotiation(id, start, end) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].status = 'confirmed';
+  appointments[idx].start = new Date(start).toISOString();
+  appointments[idx].end = new Date(end).toISOString();
+  appointments[idx].offered_slots = [];
+  appointments[idx].updated_at = new Date().toISOString();
+  appointments[idx].history.push({ event: 'confirmed', at: appointments[idx].updated_at });
+
+  saveCalendar(appointments);
+  log.action('calendar', `Negotiation confirmed as appointment: ${appointments[idx].title}`, { id });
+  return appointments[idx];
+}
+
+function findNegotiationsByContact(contactId) {
+  if (!contactId) return [];
+  return loadCalendar().filter(a => a.contact_id === contactId && a.status === 'negotiating');
+}
+
+// Reschedule negotiation: a lighter-weight version for an already-confirmed
+// appointment. The old time stays booked (still shows as busy) until the
+// other party confirms the new one, rather than moving it unilaterally.
+function setPendingReschedule(id, slot) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].pending_reschedule = { start: new Date(slot.start).toISOString(), end: new Date(slot.end).toISOString() };
+  appointments[idx].updated_at = new Date().toISOString();
+  saveCalendar(appointments);
+  return appointments[idx];
+}
+
+function clearPendingReschedule(id) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].pending_reschedule = null;
+  saveCalendar(appointments);
+  return appointments[idx];
 }
 
 function rescheduleAppointment(id, newStart, newEnd) {
@@ -459,6 +601,7 @@ export {
   loadScheduleConfig,
   parseDatetimePhrase,
   parseWorkingHoursPhrase,
+  parseDayOffPhrase,
   mentionsToday,
   startOfTomorrow,
   getDurationForRelationship,
@@ -467,7 +610,15 @@ export {
   setDurationForRelationship,
   formatWorkingHours,
   findNextAvailableSlot,
+  generateOfferSlots,
+  formatOfferList,
   createAppointment,
+  proposeAppointment,
+  updateNegotiationOffers,
+  confirmNegotiation,
+  findNegotiationsByContact,
+  setPendingReschedule,
+  clearPendingReschedule,
   rescheduleAppointment,
   cancelAppointment,
   getAppointment,

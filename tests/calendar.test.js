@@ -31,6 +31,45 @@ describe('parseWorkingHoursPhrase', () => {
   });
 });
 
+describe('parseDayOffPhrase', () => {
+  it('recognizes "don\'t work on Sundays"', () => {
+    expect(calendar.parseDayOffPhrase("I don't work on Sundays")).toEqual(['sun']);
+  });
+
+  it('recognizes "closed on weekends"', () => {
+    expect(calendar.parseDayOffPhrase('closed on weekends')).toEqual(['sat', 'sun']);
+  });
+
+  it('recognizes "no appointments on Saturday"', () => {
+    expect(calendar.parseDayOffPhrase('no appointments on saturday')).toEqual(['sat']);
+  });
+
+  it('does not misfire on an hours-setting phrase', () => {
+    expect(calendar.parseDayOffPhrase('9am to 5pm monday through friday')).toBeNull();
+  });
+
+  it('returns null when no day is found', () => {
+    expect(calendar.parseDayOffPhrase("I'm off")).toBeNull();
+  });
+
+  it('returns null for empty input', () => {
+    expect(calendar.parseDayOffPhrase(null)).toBeNull();
+  });
+});
+
+describe('formatOfferList', () => {
+  it('numbers each offered slot', () => {
+    const offers = [
+      { start: new Date('2026-08-05T14:00:00'), end: new Date('2026-08-05T14:30:00') },
+      { start: new Date('2026-08-05T15:00:00'), end: new Date('2026-08-05T15:30:00') }
+    ];
+    const formatted = calendar.formatOfferList(offers);
+    expect(formatted).toContain('1.');
+    expect(formatted).toContain('2.');
+    expect(formatted.split('\n')).toHaveLength(2);
+  });
+});
+
 describe('mentionsToday', () => {
   it('recognizes "today" and "tonight"', () => {
     expect(calendar.mentionsToday('can you fit me in today at 3pm')).toBe(true);

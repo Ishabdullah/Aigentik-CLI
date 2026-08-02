@@ -714,13 +714,22 @@ Return ONLY JSON.`;
 
     case 'set_working_hours': {
       const parsed = calendarModule.parseWorkingHoursPhrase(cmd.content);
-      if (!parsed) {
-        reply('I couldn\'t parse that. Try: "set working hours 9am to 5pm monday through friday"');
+      if (parsed) {
+        calendarModule.setWorkingHours(parsed.days, parsed.start, parsed.end);
+        reply(`✅ Working hours updated:\n${calendarModule.formatWorkingHours()}`);
+        log.action('owner-command', `Working hours set: ${JSON.stringify(parsed)}`);
         break;
       }
-      calendarModule.setWorkingHours(parsed.days, parsed.start, parsed.end);
-      reply(`✅ Working hours updated:\n${calendarModule.formatWorkingHours()}`);
-      log.action('owner-command', `Working hours set: ${JSON.stringify(parsed)}`);
+
+      const offDays = calendarModule.parseDayOffPhrase(cmd.content);
+      if (offDays) {
+        calendarModule.setDayOff(offDays);
+        reply(`✅ Marked off: ${offDays.join(', ')}.\n${calendarModule.formatWorkingHours()}`);
+        log.action('owner-command', `Days off set: ${offDays.join(',')}`);
+        break;
+      }
+
+      reply('I couldn\'t parse that. Try: "set working hours 9am to 5pm monday through friday" or "I don\'t work on Sundays"');
       break;
     }
 
