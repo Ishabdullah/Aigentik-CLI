@@ -14,8 +14,8 @@ if ! command -v node &> /dev/null; then
   exit 1
 fi
 
-# Check termux-api is available
-if ! command -v termux-sms-send &> /dev/null; then
+# Check termux-api is available (needed for Android contacts sync)
+if ! command -v termux-contact-list &> /dev/null; then
   echo "❌ Termux:API not found. Install it with: pkg install termux-api"
   exit 1
 fi

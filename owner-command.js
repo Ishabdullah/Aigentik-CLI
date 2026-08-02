@@ -333,6 +333,28 @@ Return ONLY JSON.`;
       break;
     }
 
+    case 'remove_rule': {
+      const ruleType = cmd.rule_type || 'email';
+      const identifier = cmd.rule_description || cmd.content || cmd.target;
+      if (!identifier) { reply('Which rule? Say "remove rule [description]" or check "email rules" / "sms rules" for the exact wording.'); break; }
+
+      let removed;
+      if (ruleType === 'sms') {
+        const smsRules = await import('./sms-rules.js');
+        removed = smsRules.removeRule(identifier);
+      } else {
+        removed = emailRules.removeRule(identifier);
+      }
+
+      if (removed) {
+        reply(`✅ Removed the ${ruleType} rule matching "${identifier}".`);
+        log.action('owner-command', `Removed ${ruleType} rule: ${identifier}`);
+      } else {
+        reply(`Couldn't find a ${ruleType} rule matching "${identifier}". Say "${ruleType} rules" to see the list.`);
+      }
+      break;
+    }
+
     case 'list_rules': {
       const type = cmd.rule_type || 'both';
       let msg = '';
