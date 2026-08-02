@@ -11,7 +11,7 @@ import path from 'path';
 
 import log from './logger.js';
 import config from './config.json' with { type: 'json' };
-import firstRun from './first-run.js';
+import { runIfNeeded as firstRun } from './first-run.js';
 import * as llama from './llama.js';
 import * as gmail from './gmail.js';
 import * as ownerCommand from './owner-command.js';
@@ -54,12 +54,14 @@ function startLlamaServer() {
   }
   log.info('index', 'Starting llama-server...');
   try {
+    // Expand tilde in model path
+    const modelPath = config.llama.model_path.replace(/^~/, process.env.HOME || '/data/data/com.termux/files/home');
     const cmd = config.llama.llama_server_path +
-      ' -m "' + config.llama.model_path + '"' +
+      ' -m "' + modelPath + '"' +
       ' -t ' + config.llama.threads +
       ' -c ' + config.llama.context_size +
       ' --host 0.0.0.0 --port 8080 -np 1 --log-disable';
-    execSync('tmux new-session -d -s llama-server \'' + cmd + '\' 2>/dev/null || true');
+    execSync(cmd + ' &', { stdio: 'ignore' });
     for (let i = 0; i < 30; i++) {
       execSync('sleep 1');
       if (isLlamaRunning()) {
@@ -295,7 +297,7 @@ async function main() {
   }
 
   // First run check
-  const aigentikName = await firstRun.runIfNeeded();
+  const aigentikName = await firstRun();
   config.aigentik_name = aigentikName;
   log.info('index', 'Running as: ' + aigentikName);
 

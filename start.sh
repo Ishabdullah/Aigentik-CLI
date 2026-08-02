@@ -28,22 +28,23 @@ if [ -z "$EMAIL" ]; then
   exit 1
 fi
 
-# Kill any existing Aigentik session
-tmux kill-session -t aigentik 2>/dev/null && echo "⚡ Stopped previous Aigentik session"
+# Kill any existing Aigentik process
+pkill -f "node index.js" 2>/dev/null && echo "⚡ Stopped previous Aigentik process"
 
-# Start Aigentik in a tmux session
-tmux new-session -d -s aigentik "cd $AIGENTIK_DIR && node index.js"
+# Start Aigentik in background
+cd "$AIGENTIK_DIR"
+nohup node index.js > aigentik.log 2>&1 &
+AIGENTIK_PID=$!
 
 sleep 3
 
 # Check it started
-if tmux has-session -t aigentik 2>/dev/null; then
-  echo "✅ Aigentik started in tmux session 'aigentik'"
+if kill -0 $AIGENTIK_PID 2>/dev/null; then
+  echo "✅ Aigentik started (PID: $AIGENTIK_PID)"
   echo ""
   echo "Useful commands:"
-  echo "  tmux attach -t aigentik    — view live logs"
-  echo "  tmux detach                — leave logs running (Ctrl+B then D)"
-  echo "  ./stop.sh                  — stop Aigentik"
+  echo "  tail -f ~/Aigentik-CLI/aigentik.log  — view live logs"
+  echo "  ./stop.sh                           — stop Aigentik"
   echo ""
 else
   echo "❌ Aigentik failed to start. Run: node ~/Aigentik-CLI/index.js to see errors"
