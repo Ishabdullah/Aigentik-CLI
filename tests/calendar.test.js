@@ -87,6 +87,44 @@ describe('formatOfferList', () => {
   });
 });
 
+describe('parseDatetimePhrase (forwardDate)', () => {
+  it('rolls an already-passed month/day forward to next year instead of returning a past date', () => {
+    const anchor = new Date('2026-08-02T14:00:00');
+    const result = calendar.parseDatetimePhrase('July 3rd 1pm', anchor);
+    expect(result.getTime()).toBeGreaterThan(anchor.getTime());
+    expect(result.getFullYear()).toBe(2027);
+  });
+});
+
+describe('parseDatetimeDetailed', () => {
+  const anchor = new Date('2026-08-02T14:00:00');
+
+  it('flags an explicit weekday/date as certain', () => {
+    const result = calendar.parseDatetimeDetailed('Tuesday at 2pm', anchor);
+    expect(result.hasExplicitDate).toBe(true);
+  });
+
+  it('flags a bare time with no date as not certain', () => {
+    const result = calendar.parseDatetimeDetailed('Could we do 11 AM', anchor);
+    expect(result.hasExplicitDate).toBe(false);
+  });
+
+  it('returns null when chrono finds nothing', () => {
+    expect(calendar.parseDatetimeDetailed('sounds good', anchor)).toBeNull();
+  });
+});
+
+describe('combineTimeWithDate', () => {
+  it('applies the time-of-day from one date onto the calendar day of another', () => {
+    const timeOnly = new Date('2026-08-02T15:00:00'); // 11am-ish local, whatever TZ
+    const anchorDate = new Date('2026-08-05T00:00:00');
+    const combined = calendar.combineTimeWithDate(timeOnly, anchorDate);
+    expect(combined.getDate()).toBe(anchorDate.getDate());
+    expect(combined.getHours()).toBe(timeOnly.getHours());
+    expect(combined.getMinutes()).toBe(timeOnly.getMinutes());
+  });
+});
+
 describe('mentionsToday', () => {
   it('recognizes "today" and "tonight"', () => {
     expect(calendar.mentionsToday('can you fit me in today at 3pm')).toBe(true);

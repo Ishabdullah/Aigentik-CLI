@@ -261,7 +261,14 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
 // picking/proposing a time — everything else (type, contact info) was
 // already settled in stage 2.
 async function negotiateTime({ negotiation, text, adminEmail, senderLabel, reply }) {
-  const requestedDate = calendarModule.parseDatetimePhrase(text);
+  // A bare time with no date ("could we do 11am instead?") means "that time
+  // on the date we're already discussing," not "11am relative to right
+  // now" — anchor it to the first currently-offered slot's date instead of
+  // letting chrono default it to today/tomorrow.
+  const parsed = calendarModule.parseDatetimeDetailed(text);
+  const requestedDate = parsed
+    ? (parsed.hasExplicitDate ? parsed.date : calendarModule.combineTimeWithDate(parsed.date, negotiation.offered_slots[0].start))
+    : null;
   if (!requestedDate) {
     await reply(`I didn't catch a specific time in that. Here's what I have open:\n${calendarModule.formatOfferList(negotiation.offered_slots)}\n\nWhich works, or suggest another time?`);
     return true;
@@ -348,7 +355,10 @@ async function handleRescheduleRequest({ classified, contact, reply, adminEmail,
 
 // A reply to an in-progress reschedule negotiation on an existing booking.
 async function handleRescheduleReply({ appt, text, reply, adminEmail, senderLabel }) {
-  const requestedDate = calendarModule.parseDatetimePhrase(text);
+  const parsed = calendarModule.parseDatetimeDetailed(text);
+  const requestedDate = parsed
+    ? (parsed.hasExplicitDate ? parsed.date : calendarModule.combineTimeWithDate(parsed.date, appt.pending_reschedule.start))
+    : null;
   if (!requestedDate) {
     await reply(`I didn't catch a specific time. The soonest opening I found was ${new Date(appt.pending_reschedule.start).toLocaleString()} — does that work, or would you like another time?`);
     return true;

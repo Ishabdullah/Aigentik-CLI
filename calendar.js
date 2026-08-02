@@ -136,11 +136,39 @@ function formatWorkingHours() {
 // ─── Natural-language phrase parsing (deterministic, no LLM date math) ────
 
 // Turn a raw phrase like "next tuesday at 2pm" into a concrete Date, anchored
-// to now. Returns null if chrono can't find a date in it.
+// to now. Returns null if chrono can't find a date in it. forwardDate:true
+// so an ambiguous month/day that's already passed this year ("July 3rd" said
+// in August) resolves to next year, not a date in the past — appointments
+// are never booked in the past, so rolling forward is always correct here.
 function parseDatetimePhrase(phrase, anchorDate) {
   if (!phrase) return null;
-  const result = chrono.parseDate(phrase, anchorDate ? new Date(anchorDate) : new Date());
+  const result = chrono.parseDate(phrase, anchorDate ? new Date(anchorDate) : new Date(), { forwardDate: true });
   return result || null;
+}
+
+// Like parseDatetimePhrase, but also reports whether an explicit date (day/
+// weekday/month) was actually stated, vs. only a time with the date
+// defaulted by chrono from the anchor. Callers use this to tell "Tuesday at
+// 2pm" (explicit) apart from a bare "how about 11am instead" (not explicit —
+// should be anchored to whatever date is already under discussion, not to
+// "now"). Returns null if chrono finds nothing at all.
+function parseDatetimeDetailed(phrase, anchorDate) {
+  if (!phrase) return null;
+  const results = chrono.parse(phrase, anchorDate ? new Date(anchorDate) : new Date(), { forwardDate: true });
+  if (results.length === 0) return null;
+  const start = results[0].start;
+  const hasExplicitDate = start.isCertain('day') || start.isCertain('weekday') || start.isCertain('month');
+  return { date: start.date(), hasExplicitDate };
+}
+
+// Combine a bare time-of-day (from a chrono result with no explicit date)
+// with a separate anchor date — used when someone replies with just a time
+// during an active negotiation, so "11am" means "11am on the date we were
+// just discussing," not "11am today."
+function combineTimeWithDate(timeOnlyDate, anchorDate) {
+  const combined = new Date(anchorDate);
+  combined.setHours(timeOnlyDate.getHours(), timeOnlyDate.getMinutes(), 0, 0);
+  return combined;
 }
 
 const DAY_NAME_TO_KEY = {
@@ -652,6 +680,8 @@ export {
   loadCalendar,
   loadScheduleConfig,
   parseDatetimePhrase,
+  parseDatetimeDetailed,
+  combineTimeWithDate,
   parseWorkingHoursPhrase,
   parseDayOffPhrase,
   mentionsToday,
