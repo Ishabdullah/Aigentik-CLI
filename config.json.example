@@ -3,7 +3,8 @@
     "admin_number": "15551234567",           // Your Phone number (admin)
     "admin_number_formatted": "+15551234567",
     "aigentik_number": "15559876543",        // Public Google Voice number
-    "aigentik_number_formatted": "+15559876543"
+    "aigentik_number_formatted": "+15559876543",
+    "admin_email": "your@gmail.com"          // Your email — treated the same as admin_number for commands
   },
   "gmail": {
     "email": "your@gmail.com",

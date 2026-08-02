@@ -213,6 +213,7 @@ describe('EmailProvider new mail handling', () => {
 
     expect(provider.imapClient.messageFlagsAdd).toHaveBeenCalledWith(1, ['\\Seen'], { uid: true });
     expect(provider.onNewMailCallback).toHaveBeenCalledTimes(1);
+    expect(provider.onNewMailCallback.mock.calls[0][0].uid).toBe(1);
   });
 
   it('spamMatchingEmails only moves messages the predicate matches, using UID addressing', async () => {
@@ -236,6 +237,19 @@ describe('EmailProvider new mail handling', () => {
     expect(client.fetch).toHaveBeenCalledWith([10, 11], { source: true, uid: true }, { uid: true });
     expect(client.messageMove).toHaveBeenCalledWith([10], '[Gmail]/Spam', { uid: true });
     expect(result).toEqual({ spam: 1, scanned: 2 });
+  });
+
+  it('spamByUid moves only the exact message by UID', async () => {
+    const client = {
+      mailboxOpen: jest.fn().mockResolvedValue(),
+      messageMove: jest.fn().mockResolvedValue(true)
+    };
+    provider.withManagementConnection = jest.fn((operation) => operation(client));
+
+    const result = await provider.spamByUid(42);
+
+    expect(client.messageMove).toHaveBeenCalledWith([42], '[Gmail]/Spam', { uid: true });
+    expect(result).toEqual({ spam: 1 });
   });
 });
 

@@ -294,11 +294,12 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       if (!id) { reply('Which item? Say "spam [number]"'); break; }
       const item = queue.getItem(id);
       if (!item) { reply(`Item #${id} not found.`); break; }
-      if (item.type === 'email' && gmail) {
-        // NOTE: queue items don't store a message UID, only sender/subject, so
-        // this can only target "all mail from this sender" rather than the one
-        // queued message. Left as-is pending a decision — see review notes.
-        await gmail.markAsSpam(item.sender);
+      if (gmail && item.uid) {
+        await gmail.spamByUid(item.uid);
+      } else if (item.type === 'email' && gmail) {
+        // Older queued items (from before UIDs were stored) have no way to
+        // target the exact message, so this falls back to the whole sender.
+        await gmail.markAsSpam({ from: item.sender });
       }
       queue.removeItem(id);
       reply(`🚫 Item #${id} marked as spam.`);

@@ -33,7 +33,7 @@ function generateItemId(queue) {
 }
 
 // Add item to queue — returns the queue item with display_id
-function addToQueue({ type, sender, senderName, subject, body, draftReply, contactId, replyToEmail, originalSubject }) {
+function addToQueue({ type, sender, senderName, subject, body, draftReply, contactId, replyToEmail, originalSubject, uid }) {
   const queue = loadQueue();
   const displayId = generateItemId(queue);
 
@@ -51,6 +51,9 @@ function addToQueue({ type, sender, senderName, subject, body, draftReply, conta
     // instead of sending SMS directly.
     reply_to_email: replyToEmail || null,
     original_subject: originalSubject || null,
+    // The source email's IMAP UID, so a later "spam this item" can target
+    // the exact message instead of falling back to "all mail from sender".
+    uid: uid || null,
     queued_at: new Date().toISOString(),
     status: 'pending'
   };

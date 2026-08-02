@@ -1,7 +1,8 @@
 // index.js — Aigentik v2.0
 // Communication: Gmail + Google Voice ONLY
 // No SMS sending or receiving via Termux
-// Admin: texts FROM 5551234567 TO 5559876543 (Google Voice)
+// Admin: texts FROM 5551234567 TO 5559876543 (Google Voice), OR emails from
+// owner.admin_email directly — both are routed to the same command handler.
 // Public: anyone texts 5559876543 (Google Voice)
 // All routing via Gmail IMAP IDLE
 
@@ -11,7 +12,6 @@ import path from 'path';
 
 import log from './logger.js';
 import config from './config.json' with { type: 'json' };
-import { runIfNeeded as firstRun } from './first-run.js';
 import * as llama from './llama.js';
 import * as gmail from './gmail.js';
 import * as ownerCommand from './owner-command.js';
@@ -23,6 +23,24 @@ import * as smsRules from './sms-rules.js';
 import * as emailRules from './email-rules.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
+
+// Strip a quoted-reply block off an admin command email, so replying to one
+// of Aigentik's own notifications (which Gmail threads with "On ... wrote:"
+// plus the quoted original below the new text) doesn't feed the old message
+// back into the command interpreter along with the real instruction.
+function stripQuotedReply(text) {
+  if (!text) return text;
+  const markers = [
+    /\n[ \t]*On .{0,120} wrote:[\s\S]*$/i,
+    /\n[ \t]*-{2,}\s*Original Message\s*-{2,}[\s\S]*$/i,
+    /\n[ \t]*>.*$/s
+  ];
+  let result = text;
+  for (const marker of markers) {
+    result = result.replace(marker, '');
+  }
+  return result.trim();
+}
 
 function loadProfile() {
   try {
@@ -177,7 +195,8 @@ async function handleGoogleVoiceText(email) {
         draftReply: reply,
         contactId: contact?.id,
         replyToEmail: voiceMsg.reply_to_email,
-        originalSubject: voiceMsg.original_subject
+        originalSubject: voiceMsg.original_subject,
+        uid: voiceMsg.original_email?.uid
       });
       await gmail.sendOwnerNotification(
         '💬 New text #' + item.display_id + ' from ' +
@@ -207,6 +226,21 @@ async function handleNewEmail(email) {
   // Route Google Voice texts separately
   if (gmail.isGoogleVoiceText(email)) {
     await handleGoogleVoiceText(email);
+    return;
+  }
+
+  // Owner's own email address is treated the same as the admin phone number:
+  // its content is interpreted as a command, not auto-replied to as a
+  // regular email.
+  const adminEmail = config.owner.admin_email?.toLowerCase();
+  if (adminEmail && email.from_email?.toLowerCase() === adminEmail) {
+    log.info('index', 'Admin command via email from ' + email.from_email);
+    const fakeSms = {
+      address: email.from_email,
+      body: stripQuotedReply(email.body) || (email.subject || '').trim(),
+      _id: 'email_' + Date.now()
+    };
+    await ownerCommand.handleOwnerCommand(fakeSms);
     return;
   }
 
@@ -258,7 +292,8 @@ async function handleNewEmail(email) {
         subject: email.subject,
         body: email.body?.substring(0, 300),
         draftReply: reply,
-        contactId: contact?.id
+        contactId: contact?.id,
+        uid: email.uid
       });
       await gmail.sendOwnerNotification(
         '✉️ Email #' + item.display_id + ' from ' +
@@ -299,9 +334,7 @@ async function main() {
     process.exit(1);
   }
 
-  // First run check
-  const aigentikName = await firstRun();
-  config.aigentik_name = aigentikName;
+  const aigentikName = config.aigentik_name;
   log.info('index', 'Running as: ' + aigentikName);
 
   // Sync Android contacts

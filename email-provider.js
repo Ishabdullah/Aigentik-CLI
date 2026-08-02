@@ -318,7 +318,8 @@ class EmailProvider {
       for (const msg of messages) {
         try {
           const email = await this.parseMessage(msg.source);
-          
+          email.uid = msg.uid;
+
           // Double-check email is newer than startup time
           const emailDate = new Date(email.date);
           if (emailDate < this.startupTime) {
@@ -502,6 +503,20 @@ class EmailProvider {
       await client.messageMove(matchedUids, '[Gmail]/Spam', { uid: true });
       this.logger.action('email-provider', `Marked ${matchedUids.length} of ${uids.length} scanned email(s) as spam`);
       return { spam: matchedUids.length, scanned: uids.length };
+    });
+  }
+
+  /**
+   * Move a single message to Spam by its exact UID — used when the caller
+   * already knows which message it means (e.g. a queued item), so it doesn't
+   * have to fall back to spamming everything from that sender.
+   */
+  async spamByUid(uid) {
+    return this.withManagementConnection(async (client) => {
+      await client.mailboxOpen('INBOX', { readOnly: false });
+      await client.messageMove([uid], '[Gmail]/Spam', { uid: true });
+      this.logger.action('email-provider', `Marked message UID ${uid} as spam`);
+      return { spam: 1 };
     });
   }
 

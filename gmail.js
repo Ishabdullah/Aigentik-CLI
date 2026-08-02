@@ -134,6 +134,14 @@ async function spamMatchingEmails(predicate) {
 }
 
 /**
+ * Move a single message to spam by its exact UID
+ */
+async function spamByUid(uid) {
+  const provider = getProvider();
+  return provider.spamByUid(uid);
+}
+
+/**
  * Mark emails as read
  */
 async function markAsRead(criteria) {
@@ -202,6 +210,7 @@ export {
   archiveEmails,
   markAsSpam,
   spamMatchingEmails,
+  spamByUid,
   markAsRead,
   markAsUnread,
   labelEmails,
@@ -222,6 +231,7 @@ export default {
   archiveEmails,
   markAsSpam,
   spamMatchingEmails,
+  spamByUid,
   markAsRead,
   markAsUnread,
   labelEmails,
