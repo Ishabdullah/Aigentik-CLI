@@ -71,7 +71,7 @@ async function handleOwnerCommand(sms) {
   currentReplySubject = sms.subject || 'Aigentik';
 
   const name = getAigentikName();
-  log.info('owner-command', `Owner command received: "${text}"`);
+  log.info('owner-command', `Owner command received: "${text}" (from ${sms.address}, subject "${currentReplySubject}")`);
 
   // --- Handle pending confirmations first ---
   if (pendingConfirmations.has('pending')) {

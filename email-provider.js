@@ -628,14 +628,15 @@ class EmailProvider {
    */
   async sendOwnerNotification(message) {
     const transporter = this.getTransporter();
+    const to = this.config.owner?.admin_email || this.config.gmail.email;
     try {
       await transporter.sendMail({
         from: this.config.gmail.email,
-        to: this.config.gmail.email,
+        to,
         subject: 'Aigentik Notification',
         text: message
       });
-      this.logger.info('email-provider', 'Owner notification sent via email');
+      this.logger.info('email-provider', `Owner notification sent to ${to}`);
       return true;
     } catch (error) {
       this.logger.error('email-provider', 'Failed to send owner notification', {
