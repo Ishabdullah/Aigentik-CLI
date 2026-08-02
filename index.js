@@ -329,24 +329,26 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
   };
   const adminEmail = config.owner.admin_email || config.gmail.email;
 
-  // Only treat a message as continuing a negotiation if it plausibly is one —
-  // otherwise an unrelated message from a contact with a stale, unanswered
-  // offer would get wrongly forced through the negotiation-reply path.
-  const looksSchedulingRelevant = llama.mightBeSchedulingRelated(text) || !!calendarModule.parseDatetimePhrase(text);
-
+  // A contact with an active negotiation almost certainly means this message
+  // is part of it — including replies with no date/scheduling keyword at all
+  // (e.g. answering "what's your address?" with just an address). Route
+  // there unconditionally rather than gating on a keyword match.
   const activeNegotiation = contact?.id ? calendarModule.findNegotiationsByContact(contact.id)[0] : null;
-  if (activeNegotiation && looksSchedulingRelevant) {
+  if (activeNegotiation) {
     return await advanceScheduling({ negotiation: activeNegotiation, text, contact, channel, target, reply, adminEmail, senderLabel });
   }
 
   const confirmedAppts = contact?.id ? calendarModule.findAppointmentsByContact(contact.id) : [];
   const pendingReschedule = confirmedAppts.find(a => a.pending_reschedule);
-  if (pendingReschedule && looksSchedulingRelevant) {
+  if (pendingReschedule) {
     return await handleRescheduleReply({ appt: pendingReschedule, text, reply, adminEmail, senderLabel });
   }
 
-  if (!llama.mightBeSchedulingRelated(text)) return false;
-
+  // No keyword pre-filter here on purpose: a service/estimate inquiry
+  // ("can you paint my house, what's the cost?") is exactly the kind of
+  // message that needs to turn into an appointment, and it often won't
+  // contain any obviously "scheduling" word at all. The classifier itself
+  // (not a keyword list) decides whether this implies wanting an appointment.
   let classified;
   try {
     classified = await llama.classifySchedulingIntent(text, { current_time: new Date().toISOString() });

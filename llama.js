@@ -107,26 +107,17 @@ async function interpretCommand(commandText, context) {
   }
 }
 
-// Cheap keyword gate so ordinary messages don't trigger an extra LLM call —
-// only messages that plausibly mention scheduling get classified.
-const SCHEDULING_KEYWORDS = [
-  'appointment', 'schedule', 'scheduling', 'book', 'booking', 'reschedule',
-  'meeting', 'cancel', 'available', 'availability', 'time works', 'time work',
-  'come in', 'set up a time'
-];
-
-function mightBeSchedulingRelated(text) {
-  const lower = (text || '').toLowerCase();
-  return SCHEDULING_KEYWORDS.some(kw => lower.includes(kw));
-}
-
-// Classify whether an inbound message is a scheduling request, and extract
-// the raw natural-language time phrase — actual date math is done
-// deterministically downstream (chrono-node in index.js), since the local
-// model isn't reliable for exact date arithmetic.
+// Classify whether an inbound message implies wanting an appointment (even
+// if it never uses a word like "appointment" or "schedule" — a service/
+// estimate inquiry is exactly the kind of message that needs to become
+// one), and extract the raw natural-language time phrase if any — actual
+// date math is done deterministically downstream (chrono-node in index.js),
+// since the local model isn't reliable for exact date arithmetic. Called on
+// every inbound non-admin message with no keyword pre-filter, since a
+// contractor/service inquiry rarely says "appointment" outright.
 async function classifySchedulingIntent(text, context) {
   const schema = '{"intent":"request_appointment|reschedule_appointment|cancel_appointment|none","raw_datetime_phrase":"string|null","duration_hint_minutes":"number|null"}';
-  const systemMsg = 'You classify whether a message is asking to book, move, or cancel an appointment. Return ONLY valid JSON: ' + schema + ' raw_datetime_phrase should be the exact phrase describing when, verbatim from the message (e.g. "next Tuesday at 2pm", "tomorrow afternoon"), or null if no time was mentioned. Examples: "can we set up an appointment for next tuesday at 2pm"={"intent":"request_appointment","raw_datetime_phrase":"next tuesday at 2pm","duration_hint_minutes":null} "I need to cancel my appointment"={"intent":"cancel_appointment","raw_datetime_phrase":null,"duration_hint_minutes":null} "can we move it to friday morning instead"={"intent":"reschedule_appointment","raw_datetime_phrase":"friday morning","duration_hint_minutes":null} "thanks, sounds good"={"intent":"none","raw_datetime_phrase":null,"duration_hint_minutes":null}';
+  const systemMsg = 'You classify whether a message implies wanting to book, move, or cancel an appointment — including indirect requests like asking for a quote, estimate, price, or for someone to come look at or work on something, which all imply request_appointment even without the word "appointment". Return ONLY valid JSON: ' + schema + ' raw_datetime_phrase should be the exact phrase describing when, verbatim from the message (e.g. "next Tuesday at 2pm", "tomorrow afternoon"), or null if no time was mentioned. Examples: "can we set up an appointment for next tuesday at 2pm"={"intent":"request_appointment","raw_datetime_phrase":"next tuesday at 2pm","duration_hint_minutes":null} "can you give me an estimate for painting my house?"={"intent":"request_appointment","raw_datetime_phrase":null,"duration_hint_minutes":null} "how much would it cost to fix my fence, can someone come take a look"={"intent":"request_appointment","raw_datetime_phrase":null,"duration_hint_minutes":null} "I need to cancel my appointment"={"intent":"cancel_appointment","raw_datetime_phrase":null,"duration_hint_minutes":null} "can we move it to friday morning instead"={"intent":"reschedule_appointment","raw_datetime_phrase":"friday morning","duration_hint_minutes":null} "thanks, sounds good"={"intent":"none","raw_datetime_phrase":null,"duration_hint_minutes":null} "what are your business hours"={"intent":"none","raw_datetime_phrase":null,"duration_hint_minutes":null}';
   const userMsg = 'Message: "' + text + '"\nContext: ' + JSON.stringify(context || {});
   const messages = [
     { role: 'system', content: systemMsg },
@@ -207,4 +198,4 @@ async function warmUp() {
   }
 }
 
-export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, extractContactDetails, detectTone, generateContent, chat, classifySchedulingIntent, mightBeSchedulingRelated };
+export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, extractContactDetails, detectTone, generateContent, chat, classifySchedulingIntent };
