@@ -137,43 +137,90 @@ function requiredFieldsForType(appointmentType) {
   return appointmentType === 'in_person' ? ['name', 'email', 'phone', 'address'] : ['name', 'email', 'phone'];
 }
 
-// Advance a scheduling negotiation by one turn, whether it's a brand-new
-// request or a reply to one already in progress. Three phases, in order,
-// each of which can also be satisfied by the same message that triggered
-// the previous phase (e.g. someone who states their info and a time in one
-// message skips straight to booking):
-//   1. Appointment type (call vs. in-person) — asked if not yet known.
-//   2. Missing contact info (name/email/phone/address) — asked if any of
-//      what's required for that type isn't already on file.
-//   3. Time — offer a few slots, or check/negotiate a time they proposed.
-async function advanceScheduling({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel }) {
-  if (!negotiation.appointment_type) {
-    const detectedType = calendarModule.detectAppointmentTypeFromText(text);
-    if (!detectedType) {
-      await reply('Would you like this to be a phone call, or an in-person appointment?');
-      return true;
-    }
-    negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
+// Appended to every booking/reschedule confirmation — invites follow-up
+// questions/changes and sets the expectation of a confirmation call before
+// the appointment, per the intake script.
+function closingReassurance() {
+  return "\n\nIf anything changes or you have any questions or concerns in the meantime, feel free to reach back out — we're happy to help or get you rebooked. We'll also give you a call before your appointment to confirm the time and make sure you get a chance to speak with one of our qualified technicians beforehand.";
+}
+
+// Confirm a negotiation into a real booking, send invites, and reply with
+// the confirmation + closing reassurance — the single place this happens so
+// every path (fresh intake, time negotiation, reschedule) sounds the same.
+async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, senderLabel, reply }) {
+  const typeLabel = negotiation.appointment_type === 'in_person' ? 'in-person appointment' : 'phone call';
+  const appt = calendarModule.confirmNegotiation(negotiation.id, slot.start, slot.end);
+  if (attendeeEmail) await gmail.sendCalendarInvite(appt, attendeeEmail);
+  await gmail.sendCalendarInvite(appt, adminEmail);
+  await reply(
+    `You're all set! ${typeLabel} on ${new Date(appt.start).toLocaleString()}.` +
+    (attendeeEmail ? " I've sent a calendar invite." : '') +
+    closingReassurance()
+  );
+  await gmail.sendOwnerNotification(`📅 Appointment confirmed with ${appt.attendee_name || senderLabel} (${typeLabel}): ${new Date(appt.start).toLocaleString()}`);
+}
+
+// Stage 1 of a fresh request: reply with one sentence naturally
+// acknowledging what they actually said, followed by a single combined
+// template asking for everything Aigentik needs (name, address, phone,
+// call-vs-in-person, best available time, and any specific concerns) —
+// rather than asking one question per turn.
+async function sendIntakeForm({ negotiation, text, reply }) {
+  let acknowledgment = '';
+  try {
+    acknowledgment = await llama.generateAcknowledgment(text, config.aigentik_name);
+  } catch (e) {
+    log.error('index', 'Failed to generate acknowledgment', { error: e.message });
   }
 
-  const required = requiredFieldsForType(negotiation.appointment_type);
-  let freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
-  let missing = contacts.getMissingFields(freshContact, required);
+  const form = [
+    'To get this scheduled, could you send over:',
+    '• Your full name',
+    '• Your address',
+    '• A phone number',
+    "• Whether you'd prefer a phone call or an in-person visit",
+    '• Your best available date/time (or best time to call, if a call works better)',
+    "• Any specific issues or concerns you'd like addressed",
+    '',
+    "Once I have that, I'll check the calendar and get back to you with a confirmed time."
+  ].join('\n');
 
-  if (missing.length > 0) {
-    let extracted = {};
-    try {
-      extracted = await llama.extractContactDetails(text, missing);
-    } catch (e) {
-      log.error('index', 'Failed to extract contact details', { error: e.message });
-    }
-    if (contact?.id) contacts.applyExtractedDetails(contact.id, extracted);
-    freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
-    missing = contacts.getMissingFields(freshContact, required);
-    if (missing.length > 0) {
-      await reply(`Before I can book this, could you share your ${missing.join(', ')}?`);
-      return true;
-    }
+  await reply(acknowledgment ? `${acknowledgment}\n\n${form}` : form);
+  calendarModule.markFormSent(negotiation.id);
+  return true;
+}
+
+// Stage 2: their reply to the intake form (or any message before a time has
+// been offered). Pulls name/phone/address/concerns and the appointment type
+// out of the same message in one pass — someone who answers everything at
+// once skips straight to booking; anyone missing something just gets asked
+// for what's still missing, not the whole form again.
+async function processIntakeReply({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel }) {
+  if (!negotiation.appointment_type) {
+    const detectedType = calendarModule.detectAppointmentTypeFromText(text);
+    if (detectedType) negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
+  }
+
+  let extracted = {};
+  try {
+    extracted = await llama.extractContactDetails(text, ['name', 'phone', 'address', 'concerns']);
+  } catch (e) {
+    log.error('index', 'Failed to extract intake reply', { error: e.message });
+  }
+  if (contact?.id) contacts.applyExtractedDetails(contact.id, extracted);
+  if (extracted?.concerns) calendarModule.setAppointmentNotes(negotiation.id, extracted.concerns);
+
+  const freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
+  const required = requiredFieldsForType(negotiation.appointment_type);
+  const missing = contacts.getMissingFields(freshContact, required);
+  const stillNeedsType = !negotiation.appointment_type;
+
+  if (stillNeedsType || missing.length > 0) {
+    const asks = [];
+    if (stillNeedsType) asks.push("whether you'd like a phone call or an in-person visit");
+    if (missing.length > 0) asks.push(`your ${missing.join(', ')}`);
+    await reply(`Thanks! Before I can get this scheduled, could you also share ${asks.join(' and ')}?`);
+    return true;
   }
 
   const attendeeEmail = channel === 'email' ? target : (freshContact?.emails?.[0] || null);
@@ -182,8 +229,7 @@ async function advanceScheduling({ negotiation, text, contact, channel, target, 
   const requestedDate = calendarModule.parseDatetimePhrase(text);
   const typeLabel = negotiation.appointment_type === 'in_person' ? 'in-person appointment' : 'phone call';
 
-  if (negotiation.offered_slots.length === 0 && !requestedDate) {
-    // Nothing offered yet, and they haven't proposed a time either — offer a few
+  if (!requestedDate) {
     const offers = calendarModule.generateOfferSlots({ durationMinutes: duration, afterDate, count: 3 });
     if (offers.length === 0) {
       await reply("I'm not able to find any open slots right now — I'll have my owner reach out to schedule directly.");
@@ -191,12 +237,7 @@ async function advanceScheduling({ negotiation, text, contact, channel, target, 
       return true;
     }
     calendarModule.updateNegotiationOffers(negotiation.id, offers);
-    await reply(`Great — here's what I have open for a ${typeLabel}:\n${calendarModule.formatOfferList(offers)}\n\nWhich works for you, or suggest another time?`);
-    return true;
-  }
-
-  if (!requestedDate) {
-    await reply(`I didn't catch a specific time in that. Here's what I have open:\n${calendarModule.formatOfferList(negotiation.offered_slots)}\n\nWhich works, or suggest another time?`);
+    await reply(`Great, thanks for the details! Here's what I have open for a ${typeLabel}:\n${calendarModule.formatOfferList(offers)}\n\nWhich works for you, or suggest another time?`);
     return true;
   }
 
@@ -208,16 +249,57 @@ async function advanceScheduling({ negotiation, text, contact, channel, target, 
   }
 
   if (slot.start.getTime() === requestedDate.getTime()) {
-    const appt = calendarModule.confirmNegotiation(negotiation.id, slot.start, slot.end);
-    if (attendeeEmail) await gmail.sendCalendarInvite(appt, attendeeEmail);
-    await gmail.sendCalendarInvite(appt, adminEmail);
-    await reply(`You're all set! ${typeLabel} on ${new Date(appt.start).toLocaleString()}.${attendeeEmail ? " I've sent a calendar invite." : ''}`);
-    await gmail.sendOwnerNotification(`📅 Appointment confirmed with ${appt.attendee_name || senderLabel} (${typeLabel}): ${new Date(appt.start).toLocaleString()}`);
+    await confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, senderLabel, reply });
   } else {
     calendarModule.updateNegotiationOffers(negotiation.id, [slot]);
-    await reply(`That time isn't available — the soonest opening after that is ${new Date(slot.start).toLocaleString()}. Does that work, or would you like another time?`);
+    await reply(`Thanks for the details! That time isn't available, though — the soonest opening after that is ${new Date(slot.start).toLocaleString()}. Does that work, or would you like another time?`);
   }
   return true;
+}
+
+// Stage 3: a time has already been offered, so this reply is purely about
+// picking/proposing a time — everything else (type, contact info) was
+// already settled in stage 2.
+async function negotiateTime({ negotiation, text, adminEmail, senderLabel, reply }) {
+  const requestedDate = calendarModule.parseDatetimePhrase(text);
+  if (!requestedDate) {
+    await reply(`I didn't catch a specific time in that. Here's what I have open:\n${calendarModule.formatOfferList(negotiation.offered_slots)}\n\nWhich works, or suggest another time?`);
+    return true;
+  }
+
+  const duration = (new Date(negotiation.offered_slots[0].end) - new Date(negotiation.offered_slots[0].start)) / 60000;
+  const afterDate = calendarModule.mentionsToday(text) ? undefined : calendarModule.startOfTomorrow();
+  const slot = calendarModule.findNextAvailableSlot({ afterDate, durationMinutes: duration, preferredDate: requestedDate });
+
+  if (!slot) {
+    await reply("I'm not able to find any open slot near that time — I'll have my owner reach out directly.");
+    await gmail.sendOwnerNotification(`⚠️ Could not find an available slot while scheduling with ${senderLabel}.`);
+    return true;
+  }
+
+  if (slot.start.getTime() === requestedDate.getTime()) {
+    await confirmAndClose({ negotiation, slot, attendeeEmail: negotiation.attendee_email, adminEmail, senderLabel, reply });
+  } else {
+    calendarModule.updateNegotiationOffers(negotiation.id, [slot]);
+    await reply(`That time isn't available either — the soonest opening after that is ${new Date(slot.start).toLocaleString()}. Does that work, or would you like another time?`);
+  }
+  return true;
+}
+
+// Advance a scheduling negotiation by one turn, whether it's a brand-new
+// request or a reply to one already in progress. Three stages:
+//   1. Send the intake form (once) — natural acknowledgment + one combined ask.
+//   2. Process their reply to it — extract everything at once, ask only for
+//      whatever's still missing, then offer times or check a time they gave.
+//   3. Once a time's been offered, pure back-and-forth on picking one.
+async function advanceScheduling({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel }) {
+  if (!negotiation.form_sent) {
+    return await sendIntakeForm({ negotiation, text, reply });
+  }
+  if (negotiation.offered_slots.length === 0) {
+    return await processIntakeReply({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel });
+  }
+  return await negotiateTime({ negotiation, text, adminEmail, senderLabel, reply });
 }
 
 // A fresh "move my appointment" request against an already-confirmed booking.
@@ -253,7 +335,7 @@ async function handleRescheduleRequest({ classified, contact, reply, adminEmail,
     const updated = calendarModule.rescheduleAppointment(appt.id, slot.start, slot.end);
     if (updated.attendee_email) await gmail.sendCalendarInvite(updated, updated.attendee_email);
     await gmail.sendCalendarInvite(updated, adminEmail);
-    await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.`);
+    await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.${closingReassurance()}`);
     await gmail.sendOwnerNotification(`🔁 Appointment rescheduled for ${contact?.name || senderLabel}: now ${new Date(updated.start).toLocaleString()}`);
   } else {
     // Their requested new time isn't free either — recommend the nearest
@@ -286,7 +368,7 @@ async function handleRescheduleReply({ appt, text, reply, adminEmail, senderLabe
     calendarModule.clearPendingReschedule(updated.id);
     if (updated.attendee_email) await gmail.sendCalendarInvite(updated, updated.attendee_email);
     await gmail.sendCalendarInvite(updated, adminEmail);
-    await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.`);
+    await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.${closingReassurance()}`);
     await gmail.sendOwnerNotification(`🔁 Appointment rescheduled for ${senderLabel}: now ${new Date(updated.start).toLocaleString()}`);
   } else {
     calendarModule.setPendingReschedule(appt.id, slot);
@@ -312,7 +394,7 @@ async function handleCancelRequest({ classified, contact, reply, adminEmail, sen
   calendarModule.cancelAppointment(appt.id);
   if (appt.attendee_email) await gmail.sendCalendarCancellation(appt, appt.attendee_email);
   await gmail.sendCalendarCancellation(appt, adminEmail);
-  await reply(`Done — your appointment on ${new Date(appt.start).toLocaleString()} has been cancelled.`);
+  await reply(`Done — your appointment on ${new Date(appt.start).toLocaleString()} has been cancelled. Let us know whenever you're ready to rebook.`);
   await gmail.sendOwnerNotification(`🚫 Appointment cancelled by ${contact?.name || senderLabel}: was ${new Date(appt.start).toLocaleString()}`);
   return true;
 }
@@ -444,7 +526,7 @@ async function handleGoogleVoiceText(email) {
 
   // Scheduling requests are handled separately from the normal auto-reply flow
   const schedulingHandled = await handleSchedulingMessage({
-    text: voiceMsg.body,
+    text: stripQuotedReply(voiceMsg.body) || voiceMsg.body,
     contact,
     channel: 'sms',
     voiceMsg,
@@ -583,9 +665,12 @@ async function handleNewEmail(email) {
     return;
   }
 
-  // Scheduling requests are handled separately from the normal auto-reply flow
+  // Scheduling requests are handled separately from the normal auto-reply flow.
+  // Quoted-reply content must be stripped first — Gmail's own "On [date] at
+  // [time], X wrote:" quote header reads as a real date to chrono-node
+  // otherwise, and gets mistaken for a time the customer proposed.
   const schedulingHandled = await handleSchedulingMessage({
-    text: email.body,
+    text: stripQuotedReply(email.body) || '',
     contact,
     channel: 'email',
     target: email.from_email,

@@ -136,6 +136,20 @@ async function classifySchedulingIntent(text, context) {
 // message — used while gathering info Aigentik doesn't have yet before
 // booking an appointment. Only the fields asked for are requested, so the
 // model isn't tempted to invent values for ones that weren't mentioned.
+// One short, contextual sentence acknowledging what someone actually asked
+// for — used to open the intake-form reply so it doesn't read as a canned
+// form dropped on top of their message with no reference to what they said.
+async function generateAcknowledgment(text, agentName) {
+  const messages = [
+    {
+      role: 'system',
+      content: `You are ${agentName || 'an assistant'} for a home services business. Someone just reached out. Write ONE short, warm, professional sentence acknowledging their specific request or situation — reference what they actually said, don't be generic. No greeting, no signature, just that one sentence.`
+    },
+    { role: 'user', content: text }
+  ];
+  return await chat(messages, 100);
+}
+
 async function extractContactDetails(text, fields) {
   const schema = '{' + fields.map(f => `"${f}":"string|null"`).join(',') + '}';
   const systemMsg = `Extract the following contact details if mentioned in this message: ${fields.join(', ')}. Return ONLY valid JSON: ${schema}. Use null for anything not mentioned. "address" means a home/mailing address.`;
@@ -198,4 +212,4 @@ async function warmUp() {
   }
 }
 
-export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, extractContactDetails, detectTone, generateContent, chat, classifySchedulingIntent };
+export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, extractContactDetails, generateAcknowledgment, detectTone, generateContent, chat, classifySchedulingIntent };

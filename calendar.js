@@ -410,6 +410,7 @@ function proposeAppointment({ title, contactId, attendeeName, attendeeEmail, cre
     attendee_email: attendeeEmail || null,
     appointment_type: appointmentType,
     status: 'negotiating',
+    form_sent: false, // whether the intake template has already been sent to this contact
     rsvp_status: 'pending',
     pending_reschedule: null,
     offered_slots: offeredSlots.map(s => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() })),
@@ -434,6 +435,31 @@ function setAppointmentType(id, type) {
   appointments[idx].appointment_type = type;
   appointments[idx].updated_at = new Date().toISOString();
   appointments[idx].history.push({ event: 'type_set', at: appointments[idx].updated_at, type });
+
+  saveCalendar(appointments);
+  return appointments[idx];
+}
+
+function markFormSent(id) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].form_sent = true;
+  appointments[idx].updated_at = new Date().toISOString();
+  appointments[idx].history.push({ event: 'form_sent', at: appointments[idx].updated_at });
+
+  saveCalendar(appointments);
+  return appointments[idx];
+}
+
+function setAppointmentNotes(id, notes) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].notes = notes;
+  appointments[idx].updated_at = new Date().toISOString();
 
   saveCalendar(appointments);
   return appointments[idx];
@@ -642,6 +668,8 @@ export {
   createAppointment,
   proposeAppointment,
   setAppointmentType,
+  markFormSent,
+  setAppointmentNotes,
   updateNegotiationOffers,
   confirmNegotiation,
   findNegotiationsByContact,
