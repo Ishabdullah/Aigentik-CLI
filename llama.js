@@ -91,7 +91,7 @@ async function generateSmsReply(senderNumber, senderName, message, tone, relatio
 async function interpretCommand(commandText, context) {
   const actions = 'send_email, send_sms, list_pending, approve_reply, edit_reply, skip_item, spam_item, add_rule, remove_rule, list_rules, list_contacts, find_contact, add_contact, update_contact, delete_contact, set_contact_instructions, never_reply_to, always_reply_to, pause_all, pause_email, pause_sms, resume_all, resume_email, resume_sms, status, generate_content, delete_all_emails, archive_all_emails, spam_all_promotional, clean_inbox, sync_contacts, schedule_appointment, reschedule_appointment, cancel_appointment, list_appointments, set_working_hours, set_appointment_duration, unknown';
   const schema = '{"action":"string","target":"string|null","content":"string|null","item_id":"number|null","rule_type":"string|null","rule_description":"string|null","contact_field":"string|null","contact_value":"string|null","confirm_required":false}';
-  const systemMsg = 'You interpret natural language commands for an AI assistant. Return ONLY valid JSON: ' + schema + ' Actions: ' + actions + ' contact_field is one of "name","phone","email","relationship","notes" and is used with add_contact/update_contact along with contact_value. For schedule_appointment/reschedule_appointment, target is the contact name and content is the natural-language date/time phrase verbatim (e.g. "next tuesday at 2pm"). For set_working_hours, content is the natural-language hours/days phrase verbatim, whether setting hours (e.g. "9am to 5pm monday through friday") or marking a day off (e.g. "I don\'t work on Sundays", "closed on weekends") — both go to the same action. For set_appointment_duration, rule_type is the relationship/role (e.g. "lawyer") and content is the duration in minutes as a string (e.g. "60"). Examples: "text mom I love her"={"action":"send_sms","target":"mom","content":"I love her"} "email boss about the meeting"={"action":"send_email","target":"boss","content":"the meeting"} "find Mike"={"action":"find_contact","target":"Mike"} "delete all emails"={"action":"delete_all_emails"} "pause"={"action":"pause_all"} "save email john@x.com to Mike"={"action":"update_contact","target":"Mike","contact_field":"email","contact_value":"john@x.com"} "change Mike\'s name to Michael"={"action":"update_contact","target":"Mike","contact_field":"name","contact_value":"Michael"} "add contact Sarah phone 5551234567"={"action":"add_contact","target":"Sarah","contact_field":"phone","contact_value":"5551234567"} "delete contact Sarah"={"action":"delete_contact","target":"Sarah"} "book John for next tuesday at 2pm"={"action":"schedule_appointment","target":"John","content":"next tuesday at 2pm"} "move John\'s appointment to friday 3pm"={"action":"reschedule_appointment","target":"John","content":"friday 3pm"} "cancel John\'s appointment"={"action":"cancel_appointment","target":"John"} "what\'s on my calendar this week"={"action":"list_appointments","content":"this week"} "what\'s on my calendar today"={"action":"list_appointments","content":"today"} "what\'s on my calendar for next tuesday"={"action":"list_appointments","content":"next tuesday"} "set working hours 9 to 5 monday through friday"={"action":"set_working_hours","content":"9am to 5pm monday through friday"} "I don\'t work on Sundays"={"action":"set_working_hours","content":"I don\'t work on Sundays"} "lawyers get 60 minute appointments"={"action":"set_appointment_duration","rule_type":"lawyer","content":"60"}';
+  const systemMsg = 'You interpret natural language commands for an AI assistant. Return ONLY valid JSON: ' + schema + ' Actions: ' + actions + ' contact_field is one of "name","phone","email","address","relationship","notes" and is used with add_contact/update_contact along with contact_value. For schedule_appointment/reschedule_appointment, target is the contact name and content is the natural-language date/time phrase verbatim (e.g. "next tuesday at 2pm"). For set_working_hours, content is the natural-language hours/days phrase verbatim, whether setting hours (e.g. "9am to 5pm monday through friday") or marking a day off (e.g. "I don\'t work on Sundays", "closed on weekends") — both go to the same action. For set_appointment_duration, rule_type is the relationship/role (e.g. "lawyer") and content is the duration in minutes as a string (e.g. "60"). Examples: "text mom I love her"={"action":"send_sms","target":"mom","content":"I love her"} "email boss about the meeting"={"action":"send_email","target":"boss","content":"the meeting"} "find Mike"={"action":"find_contact","target":"Mike"} "delete all emails"={"action":"delete_all_emails"} "pause"={"action":"pause_all"} "save email john@x.com to Mike"={"action":"update_contact","target":"Mike","contact_field":"email","contact_value":"john@x.com"} "change Mike\'s name to Michael"={"action":"update_contact","target":"Mike","contact_field":"name","contact_value":"Michael"} "add contact Sarah phone 5551234567"={"action":"add_contact","target":"Sarah","contact_field":"phone","contact_value":"5551234567"} "delete contact Sarah"={"action":"delete_contact","target":"Sarah"} "book John for next tuesday at 2pm"={"action":"schedule_appointment","target":"John","content":"next tuesday at 2pm"} "move John\'s appointment to friday 3pm"={"action":"reschedule_appointment","target":"John","content":"friday 3pm"} "cancel John\'s appointment"={"action":"cancel_appointment","target":"John"} "what\'s on my calendar this week"={"action":"list_appointments","content":"this week"} "what\'s on my calendar today"={"action":"list_appointments","content":"today"} "what\'s on my calendar for next tuesday"={"action":"list_appointments","content":"next tuesday"} "set working hours 9 to 5 monday through friday"={"action":"set_working_hours","content":"9am to 5pm monday through friday"} "I don\'t work on Sundays"={"action":"set_working_hours","content":"I don\'t work on Sundays"} "lawyers get 60 minute appointments"={"action":"set_appointment_duration","rule_type":"lawyer","content":"60"}';
   const userMsg = 'Command: "' + commandText + '"\nContext: ' + JSON.stringify(context || {});
   const messages = [
     { role: 'system', content: systemMsg },
@@ -141,6 +141,26 @@ async function classifySchedulingIntent(text, context) {
   }
 }
 
+// Extract specific missing contact details (name/email/phone/address) from a
+// message — used while gathering info Aigentik doesn't have yet before
+// booking an appointment. Only the fields asked for are requested, so the
+// model isn't tempted to invent values for ones that weren't mentioned.
+async function extractContactDetails(text, fields) {
+  const schema = '{' + fields.map(f => `"${f}":"string|null"`).join(',') + '}';
+  const systemMsg = `Extract the following contact details if mentioned in this message: ${fields.join(', ')}. Return ONLY valid JSON: ${schema}. Use null for anything not mentioned. "address" means a home/mailing address.`;
+  const messages = [
+    { role: 'system', content: systemMsg },
+    { role: 'user', content: `Message: "${text}"` }
+  ];
+  const raw = await chat(messages, 200);
+  try {
+    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+  } catch (e) {
+    log.warn('llama', 'Failed to parse extracted contact details', { raw });
+    return fields.reduce((o, f) => { o[f] = null; return o; }, {});
+  }
+}
+
 async function extractEntities(text) {
   const messages = [
     { role: 'system', content: `Extract contact info from text. Return ONLY valid JSON:
@@ -187,4 +207,4 @@ async function warmUp() {
   }
 }
 
-export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, detectTone, generateContent, chat, classifySchedulingIntent, mightBeSchedulingRelated };
+export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, extractContactDetails, detectTone, generateContent, chat, classifySchedulingIntent, mightBeSchedulingRelated };

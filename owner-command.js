@@ -518,6 +518,7 @@ Return ONLY JSON.`;
       if (existing) {
         if (field === 'phone') contacts.updateContact(existing.id, { phones: value });
         else if (field === 'email') contacts.updateContact(existing.id, { emails: value });
+        else if (field === 'address') contacts.updateContact(existing.id, { address: value });
         else if (field === 'relationship') contacts.updateContact(existing.id, { relationship: value });
         reply(`✅ Updated ${existing.name || targetName}.`);
       } else {
@@ -529,6 +530,7 @@ Return ONLY JSON.`;
           type: 'person',
           source: 'owner'
         });
+        if (field === 'address') contacts.updateContact(c.id, { address: value });
         reply(`✅ Added ${c.name} to contacts.`);
       }
       log.action('owner-command', `add_contact: ${targetName}`);
@@ -561,6 +563,9 @@ Return ONLY JSON.`;
       } else if (field === 'email') {
         contacts.updateContact(contact.id, { emails: value });
         reply(`✅ Added email ${value} to ${contact.name || targetName}.`);
+      } else if (field === 'address') {
+        contacts.updateContact(contact.id, { address: value });
+        reply(`✅ Set ${contact.name || targetName}'s address to ${value}.`);
       } else if (field === 'relationship') {
         contacts.updateContact(contact.id, { relationship: value });
         reply(`✅ Set ${contact.name || targetName}'s relationship to ${value}.`);

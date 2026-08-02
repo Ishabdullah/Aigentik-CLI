@@ -31,6 +31,23 @@ describe('parseWorkingHoursPhrase', () => {
   });
 });
 
+describe('detectAppointmentTypeFromText', () => {
+  it('recognizes in-person phrasing', () => {
+    expect(calendar.detectAppointmentTypeFromText('I would like an in-person visit')).toBe('in_person');
+    expect(calendar.detectAppointmentTypeFromText('can you come by my house')).toBe('in_person');
+  });
+
+  it('recognizes call/phone phrasing', () => {
+    expect(calendar.detectAppointmentTypeFromText('can we just do a phone call')).toBe('call');
+    expect(calendar.detectAppointmentTypeFromText('a quick zoom would be fine')).toBe('call');
+  });
+
+  it('returns null when the type is not stated', () => {
+    expect(calendar.detectAppointmentTypeFromText('I need an appointment sometime this week')).toBeNull();
+    expect(calendar.detectAppointmentTypeFromText(null)).toBeNull();
+  });
+});
+
 describe('parseDayOffPhrase', () => {
   it('recognizes "don\'t work on Sundays"', () => {
     expect(calendar.parseDayOffPhrase("I don't work on Sundays")).toEqual(['sun']);

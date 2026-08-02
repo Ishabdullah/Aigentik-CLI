@@ -356,7 +356,7 @@ function formatOfferList(offers) {
 
 // ─── Appointments ───────────────────────────────────────────────────────────
 
-function createAppointment({ title, start, end, contactId, attendeeName, attendeeEmail, createdVia, notes }) {
+function createAppointment({ title, start, end, contactId, attendeeName, attendeeEmail, createdVia, notes, appointmentType }) {
   const appointments = loadCalendar();
   const id = generateAppointmentId(appointments);
 
@@ -370,6 +370,7 @@ function createAppointment({ title, start, end, contactId, attendeeName, attende
     contact_id: contactId || null,
     attendee_name: attendeeName || null,
     attendee_email: attendeeEmail || null,
+    appointment_type: appointmentType || null, // 'call' | 'in_person' | null
     status: 'confirmed',
     rsvp_status: 'pending', // updated when the attendee accepts/declines via their calendar app
     pending_reschedule: null, // set when a reschedule request is awaiting the other party's confirmation
@@ -392,21 +393,22 @@ function createAppointment({ title, start, end, contactId, attendeeName, attende
 // proposes and waits for the other party to agree, rather than silently
 // substituting a different time.
 
-function proposeAppointment({ title, contactId, attendeeName, attendeeEmail, createdVia, offeredSlots }) {
+function proposeAppointment({ title, contactId, attendeeName, attendeeEmail, createdVia, offeredSlots = [], appointmentType = null }) {
   const appointments = loadCalendar();
   const id = generateAppointmentId(appointments);
-  const primary = offeredSlots[0];
+  const primary = offeredSlots[0] || null;
 
   const appointment = {
     id,
     uid: `${id}@aigentik.local`,
     ics_sequence: 0,
     title: title || `Appointment with ${attendeeName || attendeeEmail || 'contact'}`,
-    start: new Date(primary.start).toISOString(),
-    end: new Date(primary.end).toISOString(),
+    start: primary ? new Date(primary.start).toISOString() : null,
+    end: primary ? new Date(primary.end).toISOString() : null,
     contact_id: contactId || null,
     attendee_name: attendeeName || null,
     attendee_email: attendeeEmail || null,
+    appointment_type: appointmentType,
     status: 'negotiating',
     rsvp_status: 'pending',
     pending_reschedule: null,
@@ -422,6 +424,29 @@ function proposeAppointment({ title, contactId, attendeeName, attendeeEmail, cre
   saveCalendar(appointments);
   log.action('calendar', `Appointment proposed: ${appointment.title}`, { id });
   return appointment;
+}
+
+function setAppointmentType(id, type) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].appointment_type = type;
+  appointments[idx].updated_at = new Date().toISOString();
+  appointments[idx].history.push({ event: 'type_set', at: appointments[idx].updated_at, type });
+
+  saveCalendar(appointments);
+  return appointments[idx];
+}
+
+// Deterministic (not LLM) — keyword-based, since this only needs to
+// distinguish two categories and a wrong guess here would misroute the
+// whole intake flow.
+function detectAppointmentTypeFromText(text) {
+  const lower = (text || '').toLowerCase();
+  if (/\b(in[\s-]?person|come (over|by)|at (my|your|the) (home|house|office|place)|visit|on[\s-]?site|drop by)\b/.test(lower)) return 'in_person';
+  if (/\b(call|phone call|video call|zoom|virtual|over the phone|on the phone)\b/.test(lower)) return 'call';
+  return null;
 }
 
 function updateNegotiationOffers(id, offeredSlots) {
@@ -576,7 +601,8 @@ function findForDate(date) {
 function formatAppointment(appt) {
   if (!appt) return 'Unknown appointment';
   const start = new Date(appt.start);
-  return `${appt.title} — ${start.toLocaleString()} (${appt.attendee_name || appt.attendee_email || 'no contact'})`;
+  const typeLabel = appt.appointment_type === 'in_person' ? ' [🏠 in-person]' : appt.appointment_type === 'call' ? ' [📞 call]' : '';
+  return `${appt.title} — ${start.toLocaleString()} (${appt.attendee_name || appt.attendee_email || 'no contact'})${typeLabel}`;
 }
 
 function listUpcomingForSms(days = 14) {
@@ -612,8 +638,10 @@ export {
   findNextAvailableSlot,
   generateOfferSlots,
   formatOfferList,
+  detectAppointmentTypeFromText,
   createAppointment,
   proposeAppointment,
+  setAppointmentType,
   updateNegotiationOffers,
   confirmNegotiation,
   findNegotiationsByContact,

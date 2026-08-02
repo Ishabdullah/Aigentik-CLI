@@ -71,6 +71,39 @@ function findContact(identifier) {
   }) || null;
 }
 
+// Find a contact by its exact id — findContact() matches phone/email/name/
+// alias, never id, so this is the only reliable lookup once you have one
+function getContactById(id) {
+  if (!id) return null;
+  return loadContacts().find(c => c.id === id) || null;
+}
+
+// Which of `required` (any of 'name','email','phone','address') this
+// contact doesn't have yet
+function getMissingFields(contact, required) {
+  if (!contact) return [...required];
+  return required.filter(f => {
+    if (f === 'name') return !contact.name;
+    if (f === 'email') return !(contact.emails?.length);
+    if (f === 'phone') return !(contact.phones?.length);
+    if (f === 'address') return !contact.address;
+    return false;
+  });
+}
+
+// Apply LLM-extracted { name, email, phone, address } onto a contact,
+// filling in only what's actually present — used while collecting missing
+// info before booking an appointment
+function applyExtractedDetails(id, extracted) {
+  const updates = {};
+  if (extracted?.name) updates.name = extracted.name;
+  if (extracted?.email) updates.emails = extracted.email;
+  if (extracted?.phone) updates.phones = extracted.phone;
+  if (extracted?.address) updates.address = extracted.address;
+  if (Object.keys(updates).length === 0) return null;
+  return updateContact(id, updates);
+}
+
 // Find contact by relationship label (e.g. "boss", "wife")
 function findByRelationship(relationship) {
   const contacts = loadContacts();
@@ -89,6 +122,7 @@ function createContact({ name, phones, emails, relationship, type, notes, source
     aliases: [],
     phones: phones ? [phones].flat().filter(Boolean) : [],
     emails: emails ? [emails].flat().filter(Boolean) : [],
+    address: null,
     relationship: relationship || null,
     type: type || 'unknown',
     notes: notes || null,
@@ -147,6 +181,7 @@ function updateContact(id, updates) {
   if (updates.relationship) contact.relationship = updates.relationship;
   if (updates.type && contact.type === 'unknown') contact.type = updates.type;
   if (updates.notes) contact.notes = updates.notes;
+  if (updates.address) contact.address = updates.address;
 
   contact.last_contact = new Date().toISOString();
   contact.contact_count = (contact.contact_count || 0) + 1;
@@ -345,12 +380,16 @@ function formatContactInfo(contact) {
   if (contact.relationship) lines.push('🔗 ' + contact.relationship);
   if (contact.phones?.length) lines.push('📱 ' + contact.phones.join(', '));
   if (contact.emails?.length) lines.push('✉️ ' + contact.emails.join(', '));
+  if (contact.address) lines.push('🏠 ' + contact.address);
   if (contact.notes) lines.push('📝 ' + contact.notes);
   return lines.join('\n');
 }
 
 export {
   findContact,
+  getContactById,
+  getMissingFields,
+  applyExtractedDetails,
   findByRelationship,
   findAllByName,
   createContact,

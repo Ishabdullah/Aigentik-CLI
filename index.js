@@ -131,95 +131,76 @@ function pickAppointmentFromMany(appts, rawPhrase) {
     (!closest || Math.abs(new Date(a.start) - phraseDate) < Math.abs(new Date(closest.start) - phraseDate)) ? a : closest, null);
 }
 
-// A fresh "book an appointment" request. Aigentik never books unilaterally:
-// if they gave a specific time and it's free, book it now; if it's taken,
-// recommend the nearest alternative and wait for them to agree; if they
-// gave no time at all, offer a few options and wait for them to pick.
-async function handleAppointmentRequest({ classified, contact, channel, target, reply, adminEmail, senderLabel }) {
-  const attendeeEmail = channel === 'email' ? target : (contact?.emails?.[0] || null);
-  if (!attendeeEmail) {
-    await reply("I'd love to get this on the calendar — what's a good email address to send the invite to?");
-    return true;
-  }
-
-  const preferredDate = calendarModule.parseDatetimePhrase(classified.raw_datetime_phrase);
-  const duration = classified.duration_hint_minutes || calendarModule.getDurationForRelationship(contact?.relationship);
-  // Never book same-day on Aigentik's own initiative — only when explicitly asked for today/tonight
-  const afterDate = calendarModule.mentionsToday(classified.raw_datetime_phrase) ? undefined : calendarModule.startOfTomorrow();
-
-  if (preferredDate) {
-    const slot = calendarModule.findNextAvailableSlot({ afterDate, durationMinutes: duration, preferredDate });
-    if (!slot) {
-      await reply("I'm not able to find any open slot near that time — I'll have my owner reach out to schedule directly.");
-      await gmail.sendOwnerNotification(`⚠️ Could not find any available slot for a scheduling request from ${senderLabel}.`);
-      return true;
-    }
-
-    if (slot.start.getTime() === preferredDate.getTime()) {
-      const appt = calendarModule.createAppointment({
-        title: `Appointment with ${contact?.name || senderLabel}`,
-        start: slot.start,
-        end: slot.end,
-        contactId: contact?.id,
-        attendeeName: contact?.name || senderLabel,
-        attendeeEmail,
-        createdVia: channel
-      });
-      await gmail.sendCalendarInvite(appt, attendeeEmail);
-      await gmail.sendCalendarInvite(appt, adminEmail);
-      await reply(`You're booked! ${appt.title} on ${new Date(appt.start).toLocaleString()}. I've sent a calendar invite to ${attendeeEmail}.`);
-      await gmail.sendOwnerNotification(`📅 New appointment booked with ${contact?.name || senderLabel}: ${new Date(appt.start).toLocaleString()}`);
-      return true;
-    }
-
-    // Their requested time isn't free — recommend the nearest alternative
-    // and wait for them to agree, rather than booking it for them.
-    calendarModule.proposeAppointment({
-      title: `Appointment with ${contact?.name || senderLabel}`,
-      contactId: contact?.id,
-      attendeeName: contact?.name || senderLabel,
-      attendeeEmail,
-      createdVia: channel,
-      offeredSlots: [slot]
-    });
-    await reply(`That time isn't available. The soonest opening after that is ${new Date(slot.start).toLocaleString()} — does that work, or would you like to suggest another time?`);
-    return true;
-  }
-
-  // No specific time mentioned — offer a few options and wait for them to choose
-  const offers = calendarModule.generateOfferSlots({ durationMinutes: duration, afterDate, count: 3 });
-  if (offers.length === 0) {
-    await reply("I'm not able to find any open slots right now — I'll have my owner reach out to schedule directly.");
-    await gmail.sendOwnerNotification(`⚠️ Could not find any available slots for a scheduling request from ${senderLabel}.`);
-    return true;
-  }
-
-  calendarModule.proposeAppointment({
-    title: `Appointment with ${contact?.name || senderLabel}`,
-    contactId: contact?.id,
-    attendeeName: contact?.name || senderLabel,
-    attendeeEmail,
-    createdVia: channel,
-    offeredSlots: offers
-  });
-  await reply(`Happy to set that up — here's what I have open:\n${calendarModule.formatOfferList(offers)}\n\nWhich works for you, or suggest another time?`);
-  return true;
+// Required contact fields before Aigentik will book an appointment. Address
+// is only needed for an in-person visit — a phone call doesn't need one.
+function requiredFieldsForType(appointmentType) {
+  return appointmentType === 'in_person' ? ['name', 'email', 'phone', 'address'] : ['name', 'email', 'phone'];
 }
 
-// A reply to an in-progress negotiation for a brand-new appointment
-// (contact has a 'negotiating' record — either they were offered options,
-// or their earlier requested time wasn't available and got a counter-offer).
-async function handleNegotiationReply({ negotiation, text, reply, adminEmail, senderLabel }) {
+// Advance a scheduling negotiation by one turn, whether it's a brand-new
+// request or a reply to one already in progress. Three phases, in order,
+// each of which can also be satisfied by the same message that triggered
+// the previous phase (e.g. someone who states their info and a time in one
+// message skips straight to booking):
+//   1. Appointment type (call vs. in-person) — asked if not yet known.
+//   2. Missing contact info (name/email/phone/address) — asked if any of
+//      what's required for that type isn't already on file.
+//   3. Time — offer a few slots, or check/negotiate a time they proposed.
+async function advanceScheduling({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel }) {
+  if (!negotiation.appointment_type) {
+    const detectedType = calendarModule.detectAppointmentTypeFromText(text);
+    if (!detectedType) {
+      await reply('Would you like this to be a phone call, or an in-person appointment?');
+      return true;
+    }
+    negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
+  }
+
+  const required = requiredFieldsForType(negotiation.appointment_type);
+  let freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
+  let missing = contacts.getMissingFields(freshContact, required);
+
+  if (missing.length > 0) {
+    let extracted = {};
+    try {
+      extracted = await llama.extractContactDetails(text, missing);
+    } catch (e) {
+      log.error('index', 'Failed to extract contact details', { error: e.message });
+    }
+    if (contact?.id) contacts.applyExtractedDetails(contact.id, extracted);
+    freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
+    missing = contacts.getMissingFields(freshContact, required);
+    if (missing.length > 0) {
+      await reply(`Before I can book this, could you share your ${missing.join(', ')}?`);
+      return true;
+    }
+  }
+
+  const attendeeEmail = channel === 'email' ? target : (freshContact?.emails?.[0] || null);
+  const duration = calendarModule.getDurationForRelationship(freshContact?.relationship);
+  const afterDate = calendarModule.mentionsToday(text) ? undefined : calendarModule.startOfTomorrow();
   const requestedDate = calendarModule.parseDatetimePhrase(text);
+  const typeLabel = negotiation.appointment_type === 'in_person' ? 'in-person appointment' : 'phone call';
+
+  if (negotiation.offered_slots.length === 0 && !requestedDate) {
+    // Nothing offered yet, and they haven't proposed a time either — offer a few
+    const offers = calendarModule.generateOfferSlots({ durationMinutes: duration, afterDate, count: 3 });
+    if (offers.length === 0) {
+      await reply("I'm not able to find any open slots right now — I'll have my owner reach out to schedule directly.");
+      await gmail.sendOwnerNotification(`⚠️ Could not find any available slots for a scheduling request from ${senderLabel}.`);
+      return true;
+    }
+    calendarModule.updateNegotiationOffers(negotiation.id, offers);
+    await reply(`Great — here's what I have open for a ${typeLabel}:\n${calendarModule.formatOfferList(offers)}\n\nWhich works for you, or suggest another time?`);
+    return true;
+  }
+
   if (!requestedDate) {
     await reply(`I didn't catch a specific time in that. Here's what I have open:\n${calendarModule.formatOfferList(negotiation.offered_slots)}\n\nWhich works, or suggest another time?`);
     return true;
   }
 
-  const duration = (new Date(negotiation.offered_slots[0].end) - new Date(negotiation.offered_slots[0].start)) / 60000;
-  const afterDate = calendarModule.mentionsToday(text) ? undefined : calendarModule.startOfTomorrow();
   const slot = calendarModule.findNextAvailableSlot({ afterDate, durationMinutes: duration, preferredDate: requestedDate });
-
   if (!slot) {
     await reply("I'm not able to find any open slot near that time — I'll have my owner reach out directly.");
     await gmail.sendOwnerNotification(`⚠️ Could not find an available slot while scheduling with ${senderLabel}.`);
@@ -228,13 +209,13 @@ async function handleNegotiationReply({ negotiation, text, reply, adminEmail, se
 
   if (slot.start.getTime() === requestedDate.getTime()) {
     const appt = calendarModule.confirmNegotiation(negotiation.id, slot.start, slot.end);
-    if (appt.attendee_email) await gmail.sendCalendarInvite(appt, appt.attendee_email);
+    if (attendeeEmail) await gmail.sendCalendarInvite(appt, attendeeEmail);
     await gmail.sendCalendarInvite(appt, adminEmail);
-    await reply(`You're all set! ${appt.title} on ${new Date(appt.start).toLocaleString()}. I've sent a calendar invite.`);
-    await gmail.sendOwnerNotification(`📅 Appointment confirmed with ${appt.attendee_name || senderLabel}: ${new Date(appt.start).toLocaleString()}`);
+    await reply(`You're all set! ${typeLabel} on ${new Date(appt.start).toLocaleString()}.${attendeeEmail ? " I've sent a calendar invite." : ''}`);
+    await gmail.sendOwnerNotification(`📅 Appointment confirmed with ${appt.attendee_name || senderLabel} (${typeLabel}): ${new Date(appt.start).toLocaleString()}`);
   } else {
     calendarModule.updateNegotiationOffers(negotiation.id, [slot]);
-    await reply(`That time isn't available either — the soonest opening after that is ${new Date(slot.start).toLocaleString()}. Does that work, or would you like another time?`);
+    await reply(`That time isn't available — the soonest opening after that is ${new Date(slot.start).toLocaleString()}. Does that work, or would you like another time?`);
   }
   return true;
 }
@@ -355,7 +336,7 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
 
   const activeNegotiation = contact?.id ? calendarModule.findNegotiationsByContact(contact.id)[0] : null;
   if (activeNegotiation && looksSchedulingRelevant) {
-    return await handleNegotiationReply({ negotiation: activeNegotiation, text, reply, adminEmail, senderLabel });
+    return await advanceScheduling({ negotiation: activeNegotiation, text, contact, channel, target, reply, adminEmail, senderLabel });
   }
 
   const confirmedAppts = contact?.id ? calendarModule.findAppointmentsByContact(contact.id) : [];
@@ -376,7 +357,14 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
   if (!classified || classified.intent === 'none') return false;
 
   if (classified.intent === 'request_appointment') {
-    return await handleAppointmentRequest({ classified, contact, channel, target, reply, adminEmail, senderLabel });
+    const negotiation = calendarModule.proposeAppointment({
+      title: `Appointment with ${contact?.name || senderLabel}`,
+      contactId: contact?.id,
+      attendeeName: contact?.name || senderLabel,
+      attendeeEmail: channel === 'email' ? target : (contact?.emails?.[0] || null),
+      createdVia: channel
+    });
+    return await advanceScheduling({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel });
   }
   if (classified.intent === 'cancel_appointment') {
     return await handleCancelRequest({ classified, contact, reply, adminEmail, senderLabel });
