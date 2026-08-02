@@ -123,6 +123,33 @@ describe('EmailProvider', () => {
     });
   });
 
+  describe('Calendar response detection', () => {
+    it('detects accepted/declined/tentative subjects, case-insensitively', () => {
+      expect(provider.isCalendarResponse({ subject: 'Accepted: Appointment with John @ Wed Aug 5' })).toBe(true);
+      expect(provider.isCalendarResponse({ subject: 'declined: Appointment with John' })).toBe(true);
+      expect(provider.isCalendarResponse({ subject: 'Tentative: Appointment with John' })).toBe(true);
+      expect(provider.isCalendarResponse({ subject: 'Regular email subject' })).toBe(false);
+      expect(provider.isCalendarResponse({})).toBe(false);
+    });
+
+    it('parses status and attendee email from a response email', () => {
+      const parsed = provider.parseCalendarResponse({
+        subject: 'Accepted: Appointment with John @ Wed Aug 5',
+        from_email: 'john@example.com'
+      });
+      expect(parsed).toEqual({
+        status: 'accepted',
+        attendeeEmail: 'john@example.com',
+        subject: 'Accepted: Appointment with John @ Wed Aug 5'
+      });
+    });
+
+    it('returns a null status for a non-matching subject', () => {
+      const parsed = provider.parseCalendarResponse({ subject: 'Hello', from_email: 'x@y.com' });
+      expect(parsed.status).toBeNull();
+    });
+  });
+
   describe('Calendar invite building', () => {
     const appointment = {
       id: 'appt_0001',

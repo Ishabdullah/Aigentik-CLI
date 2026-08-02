@@ -31,6 +31,35 @@ describe('parseWorkingHoursPhrase', () => {
   });
 });
 
+describe('mentionsToday', () => {
+  it('recognizes "today" and "tonight"', () => {
+    expect(calendar.mentionsToday('can you fit me in today at 3pm')).toBe(true);
+    expect(calendar.mentionsToday('tonight around 7')).toBe(true);
+  });
+
+  it('does not match unrelated phrases, including ones that only imply "today"', () => {
+    expect(calendar.mentionsToday('next tuesday at 2pm')).toBe(false);
+    expect(calendar.mentionsToday('as soon as possible')).toBe(false);
+    expect(calendar.mentionsToday(null)).toBe(false);
+  });
+});
+
+describe('startOfTomorrow', () => {
+  it('returns midnight of the day after the given date', () => {
+    const result = calendar.startOfTomorrow(new Date('2026-08-02T15:30:00'));
+    expect(result.getDate()).toBe(3);
+    expect(result.getHours()).toBe(0);
+    expect(result.getMinutes()).toBe(0);
+  });
+
+  it('rolls over the month/year correctly', () => {
+    const result = calendar.startOfTomorrow(new Date('2026-12-31T23:00:00'));
+    expect(result.getFullYear()).toBe(2027);
+    expect(result.getMonth()).toBe(0);
+    expect(result.getDate()).toBe(1);
+  });
+});
+
 describe('parseDatetimePhrase', () => {
   const anchor = new Date('2026-08-02T12:00:00');
 

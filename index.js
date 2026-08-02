@@ -129,7 +129,9 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
 
     const preferredDate = calendarModule.parseDatetimePhrase(classified.raw_datetime_phrase);
     const duration = classified.duration_hint_minutes || calendarModule.getDurationForRelationship(contact?.relationship);
-    const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate });
+    // Never book same-day on Aigentik's own initiative — only when explicitly asked for today/tonight
+    const afterDate = calendarModule.mentionsToday(classified.raw_datetime_phrase) ? undefined : calendarModule.startOfTomorrow();
+    const slot = calendarModule.findNextAvailableSlot({ afterDate, durationMinutes: duration, preferredDate });
 
     if (!slot) {
       await reply("I'm not able to find an open slot right now — I'll have my owner reach out to schedule directly.");
@@ -189,7 +191,8 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
     // reschedule_appointment
     const preferredDate = calendarModule.parseDatetimePhrase(classified.raw_datetime_phrase);
     const duration = (new Date(appt.end) - new Date(appt.start)) / 60000;
-    const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate, excludeId: appt.id });
+    const afterDate = calendarModule.mentionsToday(classified.raw_datetime_phrase) ? undefined : calendarModule.startOfTomorrow();
+    const slot = calendarModule.findNextAvailableSlot({ afterDate, durationMinutes: duration, preferredDate, excludeId: appt.id });
     if (!slot) {
       await reply("I couldn't find another open slot near that time — I'll have my owner follow up.");
       return true;
@@ -339,6 +342,28 @@ async function handleNewEmail(email) {
   // Ignore emails from self
   if (email.from_email?.toLowerCase() === config.gmail.email?.toLowerCase()) {
     log.debug('index', 'Ignoring email from self');
+    return;
+  }
+
+  // Calendar invite accept/decline/tentative responses — these come from the
+  // attendee's own address (via their mail client's RSVP), not a real
+  // message, so they're handled here rather than falling through to the
+  // normal auto-reply flow (which would otherwise try to draft a reply to
+  // "Accepted: Appointment with...").
+  if (gmail.isCalendarResponse(email)) {
+    const rsvp = gmail.parseCalendarResponse(email);
+    const appt = rsvp.status && calendarModule.findAppointmentByAttendeeEmail(rsvp.attendeeEmail);
+    if (appt) {
+      calendarModule.setRsvpStatus(appt.id, rsvp.status);
+      const icon = rsvp.status === 'accepted' ? '✅' : rsvp.status === 'declined' ? '❌' : '❔';
+      await gmail.sendOwnerNotification(
+        `${icon} ${appt.attendee_name || rsvp.attendeeEmail} ${rsvp.status} the appointment: ` +
+        `${appt.title} on ${new Date(appt.start).toLocaleString()}`
+      );
+      log.action('index', `Calendar RSVP recorded: ${rsvp.attendeeEmail} ${rsvp.status}`, { appointmentId: appt.id });
+    } else {
+      log.debug('index', 'Calendar response email did not match any known appointment', { from: email.from_email, subject: email.subject });
+    }
     return;
   }
 

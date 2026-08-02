@@ -12,15 +12,14 @@ import log from './logger.js';
 const CALENDAR_FILE = path.join(config.paths.data_dir, 'calendar.json');
 const SCHEDULE_CONFIG_FILE = path.join(config.paths.data_dir, 'schedule-config.json');
 
+// Fully open by default (all 7 days, 00:00-23:59) — Aigentik doesn't know your
+// real availability until you tell it, so it shouldn't invent a 9-5 Mon-Fri
+// assumption on your behalf. Narrow it down with "set working hours ...".
+const OPEN_DAY = { start: '00:00', end: '23:59' };
 const DEFAULT_SCHEDULE_CONFIG = {
   working_hours: {
-    mon: { start: '09:00', end: '17:00' },
-    tue: { start: '09:00', end: '17:00' },
-    wed: { start: '09:00', end: '17:00' },
-    thu: { start: '09:00', end: '17:00' },
-    fri: { start: '09:00', end: '17:00' },
-    sat: null,
-    sun: null
+    sun: { ...OPEN_DAY }, mon: { ...OPEN_DAY }, tue: { ...OPEN_DAY }, wed: { ...OPEN_DAY },
+    thu: { ...OPEN_DAY }, fri: { ...OPEN_DAY }, sat: { ...OPEN_DAY }
   },
   default_duration_minutes: 30,
   buffer_minutes: 15,
@@ -208,6 +207,21 @@ function parseWorkingHoursPhrase(phrase) {
   return { days, start, end };
 }
 
+// Does a raw scheduling phrase explicitly ask for today? Used to gate
+// same-day booking — Aigentik should never book today on its own initiative,
+// only when the person actually said "today"/"tonight".
+function mentionsToday(phrase) {
+  return /\btoday\b|\btonight\b/i.test(phrase || '');
+}
+
+// Start of the next calendar day after `from` (or now)
+function startOfTomorrow(from) {
+  const d = from ? new Date(from) : new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
 // ─── Slot finding ───────────────────────────────────────────────────────────
 
 // Check whether [start, end) fits inside that day's working hours
@@ -316,6 +330,7 @@ function createAppointment({ title, start, end, contactId, attendeeName, attende
     attendee_name: attendeeName || null,
     attendee_email: attendeeEmail || null,
     status: 'confirmed',
+    rsvp_status: 'pending', // updated when the attendee accepts/declines via their calendar app
     created_via: createdVia || 'owner',
     notes: notes || null,
     created_at: new Date().toISOString(),
@@ -371,11 +386,48 @@ function findAppointmentsByContact(contactId) {
   return loadCalendar().filter(a => a.contact_id === contactId && a.status === 'confirmed');
 }
 
+// Most relevant appointment for a given attendee email — used to match an
+// incoming calendar-response email (accept/decline) back to the booking it's
+// about. Prefers the soonest upcoming one still awaiting a response.
+function findAppointmentByAttendeeEmail(email) {
+  if (!email) return null;
+  const norm = email.toLowerCase().trim();
+  const matches = loadCalendar()
+    .filter(a => a.status === 'confirmed' && a.attendee_email?.toLowerCase().trim() === norm)
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+  if (matches.length === 0) return null;
+  return matches.find(a => a.rsvp_status === 'pending') || matches[0];
+}
+
+function setRsvpStatus(id, status) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+  appointments[idx].rsvp_status = status;
+  appointments[idx].updated_at = new Date().toISOString();
+  appointments[idx].history.push({ event: 'rsvp', at: appointments[idx].updated_at, status });
+  saveCalendar(appointments);
+  log.info('calendar', `RSVP recorded for ${appointments[idx].title}: ${status}`, { id });
+  return appointments[idx];
+}
+
 function findUpcoming(days = 30) {
   const now = new Date();
   const until = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
   return loadCalendar()
     .filter(a => a.status === 'confirmed' && new Date(a.start) >= now && new Date(a.start) <= until)
+    .sort((a, b) => new Date(a.start) - new Date(b.start));
+}
+
+// All confirmed appointments falling on the same calendar day as `date`
+function findForDate(date) {
+  const target = new Date(date);
+  const dayStart = new Date(target);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(target);
+  dayEnd.setHours(23, 59, 59, 999);
+  return loadCalendar()
+    .filter(a => a.status === 'confirmed' && new Date(a.start) >= dayStart && new Date(a.start) <= dayEnd)
     .sort((a, b) => new Date(a.start) - new Date(b.start));
 }
 
@@ -393,11 +445,22 @@ function listUpcomingForSms(days = 14) {
   return lines.join('\n');
 }
 
+function listForDateForSms(date) {
+  const appts = findForDate(date);
+  const label = new Date(date).toLocaleDateString();
+  if (appts.length === 0) return `📅 No appointments on ${label}.`;
+  const lines = [`📅 Appointments on ${label}:\n`];
+  appts.forEach(a => lines.push(`#${a.id.replace('appt_', '')} ${formatAppointment(a)}`));
+  return lines.join('\n');
+}
+
 export {
   loadCalendar,
   loadScheduleConfig,
   parseDatetimePhrase,
   parseWorkingHoursPhrase,
+  mentionsToday,
+  startOfTomorrow,
   getDurationForRelationship,
   setWorkingHours,
   setDayOff,
@@ -409,7 +472,11 @@ export {
   cancelAppointment,
   getAppointment,
   findAppointmentsByContact,
+  findAppointmentByAttendeeEmail,
+  setRsvpStatus,
   findUpcoming,
+  findForDate,
   formatAppointment,
-  listUpcomingForSms
+  listUpcomingForSms,
+  listForDateForSms
 };

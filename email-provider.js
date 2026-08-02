@@ -655,6 +655,29 @@ class EmailProvider {
   }
 
   /**
+   * Detect a calendar invite-response email — when an attendee accepts,
+   * declines, or tentatively accepts an .ics invite in their own mail
+   * client, it sends the organizer a reply whose subject Gmail/Outlook
+   * prefix with "Accepted:"/"Declined:"/"Tentative:". No .ics parsing
+   * needed — this convention is reliable enough on its own.
+   */
+  isCalendarResponse(email) {
+    return /^(accepted|declined|tentative):/i.test(email.subject || '');
+  }
+
+  /**
+   * Parse a calendar invite-response email into { status, attendeeEmail, subject }
+   */
+  parseCalendarResponse(email) {
+    const match = (email.subject || '').match(/^(accepted|declined|tentative):/i);
+    return {
+      status: match ? match[1].toLowerCase() : null,
+      attendeeEmail: email.from_email || null,
+      subject: email.subject
+    };
+  }
+
+  /**
    * Parse Google Voice forwarded email into SMS-like object
    */
   parseGoogleVoiceEmail(email) {

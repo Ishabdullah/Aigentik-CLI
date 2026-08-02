@@ -22,6 +22,8 @@ describe('gmail.js compatibility wrapper', () => {
     expect(typeof gmail.labelEmails).toBe('function');
     expect(typeof gmail.markAllAsSeen).toBe('function');
     expect(typeof gmail.isGoogleVoiceText).toBe('function');
+    expect(typeof gmail.isCalendarResponse).toBe('function');
+    expect(typeof gmail.parseCalendarResponse).toBe('function');
     expect(typeof gmail.parseGoogleVoiceEmail).toBe('function');
     expect(typeof gmail.replyToGoogleVoiceText).toBe('function');
     
@@ -44,6 +46,8 @@ describe('gmail.js compatibility wrapper', () => {
     expect(defaultExport.labelEmails).toBeDefined();
     expect(defaultExport.markAllAsSeen).toBeDefined();
     expect(defaultExport.isGoogleVoiceText).toBeDefined();
+    expect(defaultExport.isCalendarResponse).toBeDefined();
+    expect(defaultExport.parseCalendarResponse).toBeDefined();
     expect(defaultExport.parseGoogleVoiceEmail).toBeDefined();
     expect(defaultExport.replyToGoogleVoiceText).toBeDefined();
   });

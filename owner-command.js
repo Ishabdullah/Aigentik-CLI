@@ -392,9 +392,13 @@ Return ONLY JSON.`;
       if (cmd.target) {
         const contact = contacts.findContact(cmd.target) ||
                         contacts.findByRelationship(cmd.target);
-        if (contact) {
-          toEmail = contact.emails?.[0];
+        if (contact && contact.emails?.length) {
+          toEmail = contact.emails[0];
           toName = contact.name || cmd.target;
+        } else if (cmd.target.includes('@')) {
+          // A raw email address, not (yet) a saved contact
+          toEmail = cmd.target;
+          toName = cmd.target;
         }
       }
 
@@ -593,9 +597,13 @@ Return ONLY JSON.`;
       const targetName = cmd.target;
       if (!targetName) { reply('Who\'s this appointment for?'); break; }
 
-      const contact = contacts.findContact(targetName) || contacts.findByRelationship(targetName);
+      let contact = contacts.findContact(targetName) || contacts.findByRelationship(targetName);
+      if (!contact && targetName.includes('@')) {
+        // A raw email address, not (yet) a saved contact — track it anyway
+        contact = contacts.findOrCreateByEmail(targetName, null);
+      }
       if (!contact) {
-        reply(`Contact "${targetName}" not found. Add them first with "add contact ${targetName}".`);
+        reply(`Contact "${targetName}" not found. Add them first with "add contact ${targetName}", or give me an email address directly.`);
         break;
       }
       if (!contact.emails?.length) {
@@ -605,7 +613,9 @@ Return ONLY JSON.`;
 
       const preferredDate = calendarModule.parseDatetimePhrase(cmd.content);
       const duration = calendarModule.getDurationForRelationship(contact.relationship);
-      const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate });
+      // Never book same-day unless explicitly asked for today/tonight
+      const afterDate = calendarModule.mentionsToday(cmd.content) ? undefined : calendarModule.startOfTomorrow();
+      const slot = calendarModule.findNextAvailableSlot({ afterDate, durationMinutes: duration, preferredDate });
       if (!slot) { reply('I couldn\'t find an open slot for that.'); break; }
 
       const appt = calendarModule.createAppointment({
@@ -642,7 +652,8 @@ Return ONLY JSON.`;
       if (!preferredDate) { reply('What time should I move it to?'); break; }
 
       const duration = (new Date(appt.end) - new Date(appt.start)) / 60000;
-      const slot = calendarModule.findNextAvailableSlot({ durationMinutes: duration, preferredDate, excludeId: appt.id });
+      const afterDate = calendarModule.mentionsToday(cmd.content) ? undefined : calendarModule.startOfTomorrow();
+      const slot = calendarModule.findNextAvailableSlot({ afterDate, durationMinutes: duration, preferredDate, excludeId: appt.id });
       if (!slot) { reply('That time isn\'t available and I couldn\'t find a nearby opening.'); break; }
 
       const updated = calendarModule.rescheduleAppointment(appt.id, slot.start, slot.end);
@@ -681,9 +692,25 @@ Return ONLY JSON.`;
       break;
     }
 
-    case 'list_appointments':
-      reply(calendarModule.listUpcomingForSms());
+    case 'list_appointments': {
+      const content = (cmd.content || '').toLowerCase().trim();
+      if (!content) {
+        reply(calendarModule.listUpcomingForSms());
+      } else if (content.includes('today')) {
+        reply(calendarModule.listForDateForSms(new Date()));
+      } else if (content.includes('this week')) {
+        reply(calendarModule.listUpcomingForSms(7));
+      } else if (content.includes('next week')) {
+        reply(calendarModule.listUpcomingForSms(14));
+      } else if (content.includes('month')) {
+        reply(calendarModule.listUpcomingForSms(30));
+      } else {
+        // A specific date, e.g. "tomorrow", "next tuesday", "august 5th"
+        const date = calendarModule.parseDatetimePhrase(content);
+        reply(date ? calendarModule.listForDateForSms(date) : calendarModule.listUpcomingForSms());
+      }
       break;
+    }
 
     case 'set_working_hours': {
       const parsed = calendarModule.parseWorkingHoursPhrase(cmd.content);

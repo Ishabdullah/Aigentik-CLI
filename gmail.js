@@ -200,6 +200,22 @@ function isGoogleVoiceText(email) {
 }
 
 /**
+ * Detect whether an email is a calendar invite accept/decline/tentative response
+ */
+function isCalendarResponse(email) {
+  const provider = getProvider();
+  return provider.isCalendarResponse(email);
+}
+
+/**
+ * Parse a calendar invite-response email into { status, attendeeEmail, subject }
+ */
+function parseCalendarResponse(email) {
+  const provider = getProvider();
+  return provider.parseCalendarResponse(email);
+}
+
+/**
  * Parse a Google Voice forwarded email into an SMS-like object
  */
 function parseGoogleVoiceEmail(email) {
@@ -234,6 +250,8 @@ export {
   labelEmails,
   markAllAsSeen,
   isGoogleVoiceText,
+  isCalendarResponse,
+  parseCalendarResponse,
   parseGoogleVoiceEmail,
   replyToGoogleVoiceText
 };
@@ -257,6 +275,8 @@ export default {
   labelEmails,
   markAllAsSeen,
   isGoogleVoiceText,
+  isCalendarResponse,
+  parseCalendarResponse,
   parseGoogleVoiceEmail,
   replyToGoogleVoiceText
 };
