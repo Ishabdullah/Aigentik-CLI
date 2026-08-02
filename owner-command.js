@@ -17,6 +17,15 @@ const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 // Pending confirmations for destructive actions
 const pendingConfirmations = new Map();
 
+// Where the current command's replies should go. Set at the top of every
+// handleOwnerCommand() call (including the later "yes"/"no" confirmation
+// call, which comes from the same channel as the original command), and
+// read by reply(). Google Voice commands (address is a phone number) have
+// no email to reply to directly, so they keep going to the self-notification
+// address as before.
+let currentReplyTarget = null;
+let currentReplySubject = 'Aigentik';
+
 function getAigentikName() {
   try {
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
@@ -26,8 +35,12 @@ function getAigentikName() {
 
 async function reply(message) {
   try {
-    const { sendOwnerNotification } = await import('./gmail.js');
-    await sendOwnerNotification(message);
+    const gmail = await import('./gmail.js');
+    if (currentReplyTarget) {
+      await gmail.sendReply(currentReplyTarget, currentReplySubject, message);
+    } else {
+      await gmail.sendOwnerNotification(message);
+    }
   } catch (e) {
     log.error('owner-command', 'Failed to reply to owner', { error: e.message });
   }
@@ -53,6 +66,9 @@ function handleRename(newName) {
 async function handleOwnerCommand(sms) {
   const text = sms.body?.trim();
   if (!text) return;
+
+  currentReplyTarget = sms.address?.includes('@') ? sms.address : null;
+  currentReplySubject = sms.subject || 'Aigentik';
 
   const name = getAigentikName();
   log.info('owner-command', `Owner command received: "${text}"`);

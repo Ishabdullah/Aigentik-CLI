@@ -238,6 +238,7 @@ async function handleNewEmail(email) {
     const fakeSms = {
       address: email.from_email,
       body: stripQuotedReply(email.body) || (email.subject || '').trim(),
+      subject: email.subject,
       _id: 'email_' + Date.now()
     };
     await ownerCommand.handleOwnerCommand(fakeSms);
