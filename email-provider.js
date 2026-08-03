@@ -880,9 +880,5 @@ export function getEmailProvider(options) {
   return emailProviderInstance;
 }
 
-export function resetEmailProvider() {
-  emailProviderInstance = null;
-}
-
 export { EmailProvider };
 export default EmailProvider;

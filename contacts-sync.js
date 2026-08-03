@@ -3,30 +3,8 @@
 // Merges into Aigentik contacts.json without overwriting existing data
 
 import { execSync } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import config from './config.json' with { type: 'json' };
 import log from './logger.js';
-
-const CONTACTS_FILE = path.join(config.paths.data_dir, 'contacts.json');
-
-function normalizePhone(phone) {
-  if (!phone) return null;
-  return phone.replace(/[^0-9]/g, '').slice(-10);
-}
-
-function loadContacts() {
-  try {
-    if (fs.existsSync(CONTACTS_FILE)) {
-      return JSON.parse(fs.readFileSync(CONTACTS_FILE, 'utf8'));
-    }
-  } catch (e) {}
-  return [];
-}
-
-function saveContacts(contacts) {
-  fs.writeFileSync(CONTACTS_FILE, JSON.stringify(contacts, null, 2));
-}
+import { loadContacts, saveContacts, normalizePhone } from './contacts.js';
 
 function generateId(contacts) {
   let max = 0;

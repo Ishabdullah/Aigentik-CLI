@@ -166,20 +166,6 @@ async function extractContactDetails(text, fields) {
   }
 }
 
-async function extractEntities(text) {
-  const messages = [
-    { role: 'system', content: `Extract contact info from text. Return ONLY valid JSON:
-{"names":[],"phones":[],"emails":[],"businesses":[],"relationships":[],"topics":[]}` },
-    { role: 'user', content: `Extract from: "${text}"` }
-  ];
-  const raw = await chat(messages, 256);
-  try {
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
-  } catch (e) {
-    return { names: [], phones: [], emails: [], businesses: [], relationships: [], topics: [] };
-  }
-}
-
 async function detectTone(text) {
   const messages = [
     { role: 'system', content: 'Detect tone. Reply with ONE word only: formal, casual, urgent, friendly, aggressive, neutral, or professional' },
@@ -212,4 +198,4 @@ async function warmUp() {
   }
 }
 
-export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractEntities, extractContactDetails, generateAcknowledgment, detectTone, generateContent, chat, classifySchedulingIntent };
+export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractContactDetails, generateAcknowledgment, detectTone, generateContent, chat, classifySchedulingIntent };

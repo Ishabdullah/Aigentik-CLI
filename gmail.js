@@ -10,7 +10,7 @@ let emailProvider = null;
 let onNewEmailCallback = null;
 const STARTUP_TIME = new Date();
 
-log.info && console.log(`[gmail] Startup time: ${STARTUP_TIME.toISOString()} — older emails will be skipped`);
+log.info('gmail', `Startup time: ${STARTUP_TIME.toISOString()} — older emails will be skipped`);
 
 // Initialize email provider lazily
 function getProvider() {

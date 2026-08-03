@@ -404,5 +404,7 @@ export {
   findOrCreateByPhone,
   findOrCreateByEmail,
   loadContacts,
+  saveContacts,
+  normalizePhone,
   setContactInstructions
 };
