@@ -4,19 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Aigentik is a personal AI assistant that runs entirely on-device in Termux (Android). It watches a Gmail inbox over IMAP IDLE, drafts/sends replies via a local LLM (Qwen served by `llama.cpp`), and is controlled entirely through natural language — either by texting a Google Voice number or emailing the monitored inbox directly. There is no cloud AI, no external API key, and no server component; the model and all data live on the phone. Full behavioral documentation lives in `README.md` — read it before making non-trivial changes, since a lot of the "why" here isn't inferrable from the code alone.
+Aigentik is a personal AI assistant built to run entirely on-device in Termux (Android), though the Node.js application itself isn't Android-specific and also runs on regular Linux (useful for development). It watches a Gmail inbox over IMAP IDLE, drafts/sends replies via a local LLM (Qwen served by `llama.cpp`), and is controlled entirely through natural language — either by texting a Google Voice number or emailing the monitored inbox directly. There is no cloud AI, no external API key, and no server component; the model and all data live on the phone (or dev machine). Full behavioral documentation lives in `README.md` — read it before making non-trivial changes, since a lot of the "why" here isn't inferrable from the code alone.
 
 ## Commands
 
 ```bash
-npm test                # full Jest suite with coverage (tests/*.test.js)
+./install.sh              # one-shot setup: system packages, llama.cpp build, model download, npm install,
+                           # starter config.json — idempotent, safe to re-run, skips whatever already exists
+npm test                  # full Jest suite with coverage (tests/*.test.js)
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.mjs   # same, no coverage
 node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.config.mjs -t "test name"   # run a single test by name
-node --check <file>.js  # syntax-check a single file (no bundler/linter in this repo)
-./start.sh               # starts llama-server if needed, then `node index.js` in the background, logs to aigentik.log
-./stop.sh                 # stops it
-tail -f aigentik.log      # watch live logs
+node --check <file>.js    # syntax-check a single file (no bundler/linter in this repo)
+./start.sh                 # starts llama-server if needed, then `node index.js` in the background, logs to aigentik.log
+./stop.sh                   # stops it
+tail -f aigentik.log        # watch live logs
 ```
+
+`install.sh`, `start.sh`, and `stop.sh` all use a `#!/bin/sh`-based shebang that re-execs into bash — Termux has no `/usr/bin/env` and no bash at `/bin/bash` (it lives under Termux's own sandboxed prefix), so a plain `#!/usr/bin/env bash` or `#!/bin/bash` shebang breaks there. Preserve that pattern in any new top-level shell script.
 
 There is no build step, linter, or type checker configured — `node --check` and the Jest suite are the only automated verification available. Tests cover `email-provider.js`, `gmail.js`, and `calendar.js` (IMAP lifecycle/parsing, `.ics` invite building, deterministic date-phrase parsing). File-backed operations on `contacts.js`, `queue.js`, and calendar booking/slot-finding are **not** covered by Jest — they read `paths.data_dir` from the real `config.json`, so exercising them through the test suite would write into the live `data/` directory. Verify changes to those manually (see "Testing against the live model" below).
 
