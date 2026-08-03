@@ -43,16 +43,33 @@ function stripQuotedReply(text) {
   return result.trim();
 }
 
+// On a brand-new install there is no profile.json yet (data/ is gitignored,
+// so a fresh clone starts with nothing) — create one with owner/business
+// fields left unset rather than defaulting them to this deployment's own
+// values, so a new install's onboarding email (see sendOnboardingEmail())
+// actually triggers instead of silently inheriting a stranger's name.
 function loadProfile() {
   try {
+    if (!fs.existsSync(PROFILE_FILE)) {
+      const fresh = {
+        configured: false,
+        aigentik_name: 'Aigentik',
+        setup_date: new Date().toISOString(),
+        owner_name: null,
+        business_name: null,
+        business_description: null,
+        onboarding_sent: false
+      };
+      fs.writeFileSync(PROFILE_FILE, JSON.stringify(fresh, null, 2));
+    }
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
     config.aigentik_name = profile.aigentik_name || 'Aigentik';
-    config.owner_name = profile.owner_name || 'Ish';
+    config.owner_name = profile.owner_name || null;
     config.business_name = profile.business_name || null;
     config.business_description = profile.business_description || null;
   } catch (e) {
     config.aigentik_name = 'Aigentik';
-    config.owner_name = 'Ish';
+    config.owner_name = null;
     config.business_name = null;
     config.business_description = null;
   }
@@ -486,7 +503,7 @@ async function handleGoogleVoiceText(email) {
   log.info('index', 'Google Voice text from ' + (voiceMsg.sender_name || voiceMsg.sender_phone),
     { body: voiceMsg.body.substring(0, 50) });
 
-  const ownerName = config.owner_name || 'Ish';
+  const ownerName = config.owner_name || null;
   const agentName = config.aigentik_name || 'Aigentik';
   const businessName = config.business_name || null;
   const businessDescription = config.business_description || null;
@@ -516,7 +533,7 @@ async function handleGoogleVoiceText(email) {
   });
 
   // Check for urgent keyword
-  if (voiceMsg.body.toLowerCase().includes(ownerName.toLowerCase())) {
+  if (ownerName && voiceMsg.body.toLowerCase().includes(ownerName.toLowerCase())) {
     await gmail.sendOwnerNotification(
       '🚨 URGENT: ' + (voiceMsg.sender_name || voiceMsg.sender_phone) +
       ' is trying to reach you!\nMessage: "' + voiceMsg.body.substring(0, 100) + '"'
@@ -674,7 +691,7 @@ async function handleNewEmail(email) {
     body: email.body
   });
 
-  const ownerName = config.owner_name || 'Ish';
+  const ownerName = config.owner_name || null;
   const agentName = config.aigentik_name || 'Aigentik';
   const businessName = config.business_name || null;
   const businessDescription = config.business_description || null;
@@ -740,6 +757,43 @@ async function handleNewEmail(email) {
   }
 }
 
+// Ask the admin for whatever identity info is still missing (owner's name
+// and/or business name + description) — sent once per install via the flag
+// in profile.json, not on every restart, since the admin may take a while
+// to reply and a crash-loop shouldn't spam them. The reply is picked up by
+// ownerCommand's onboarding check (owner-command.js) the next time an email
+// arrives from the admin address.
+async function sendOnboardingEmail() {
+  const needsOwnerName = !config.owner_name;
+  const needsBusiness = !config.business_name;
+  if (!needsOwnerName && !needsBusiness) return;
+
+  let profile;
+  try {
+    profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
+  } catch (e) {
+    return;
+  }
+  if (profile.onboarding_sent) return;
+
+  const asks = [];
+  if (needsOwnerName) asks.push('- Your name, so I know what to call you');
+  if (needsBusiness) asks.push('- Your business name');
+  if (needsBusiness) asks.push('- A short description of what your business does');
+
+  await gmail.sendOwnerNotification(
+    `👋 Hi! I'm ${config.aigentik_name}, your new AI assistant.\n\n` +
+    `Before I start replying to emails and texts on your behalf, I need a couple things:\n\n` +
+    asks.join('\n') + '\n\n' +
+    `Just reply to this email in your own words, filling in the blanks — for example:\n` +
+    `"My name is [your name]. The business is [business name], [what the business does]."`
+  );
+
+  profile.onboarding_sent = true;
+  fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
+  log.action('index', 'Sent onboarding request email to admin');
+}
+
 // Graceful shutdown
 async function shutdown(signal) {
   log.info('index', signal + ' received — shutting down Aigentik');
@@ -785,15 +839,19 @@ async function main() {
   }
 
   // Notify owner via email only
-  const pending = queue.listQueue();
-  await gmail.sendOwnerNotification(
-    '✅ ' + aigentikName + ' v2.0 is online!\n' +
-    '📬 Pending: ' + pending.length + '\n' +
-    '📧 Gmail: monitoring\n' +
-    '💬 Google Voice: monitoring\n' +
-    '📵 SMS: disabled\n\n' +
-    'Text me at 5559876543 from your 9332 number to give commands!'
-  );
+  if (!config.owner_name || !config.business_name) {
+    await sendOnboardingEmail();
+  } else {
+    const pending = queue.listQueue();
+    await gmail.sendOwnerNotification(
+      '✅ ' + aigentikName + ' v2.0 is online!\n' +
+      '📬 Pending: ' + pending.length + '\n' +
+      '📧 Gmail: monitoring\n' +
+      '💬 Google Voice: monitoring\n' +
+      '📵 SMS: disabled\n\n' +
+      'Text me at 5559876543 from your 9332 number to give commands!'
+    );
+  }
 
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));

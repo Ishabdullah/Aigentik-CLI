@@ -14,22 +14,24 @@ There is no cloud AI, no external API key, and no server. The model, the inbox c
 4. [Installation](#installation)
 5. [Configuration reference](#configuration-reference)
 6. [Running Aigentik](#running-aigentik)
-7. [The two communication channels](#the-two-communication-channels)
-8. [Who Aigentik listens to as "the owner"](#who-aigentik-listens-to-as-the-owner)
-9. [What happens to an incoming email, step by step](#what-happens-to-an-incoming-email-step-by-step)
-10. [What happens to an incoming Google Voice text, step by step](#what-happens-to-an-incoming-google-voice-text-step-by-step)
-11. [Owner command reference](#owner-command-reference)
-12. [The review queue](#the-review-queue)
-13. [Rule engines](#rule-engines)
-14. [The contact directory](#the-contact-directory)
-15. [Appointment scheduling](#appointment-scheduling)
-16. [Data files](#data-files)
-17. [Source file reference](#source-file-reference)
-18. [Testing](#testing)
-19. [Troubleshooting](#troubleshooting)
-20. [Security notes](#security-notes)
-21. [Known limitations](#known-limitations)
-22. [License](#license)
+7. [First-run onboarding](#first-run-onboarding)
+8. [Business identity and persona](#business-identity-and-persona)
+9. [The two communication channels](#the-two-communication-channels)
+10. [Who Aigentik listens to as "the owner"](#who-aigentik-listens-to-as-the-owner)
+11. [What happens to an incoming email, step by step](#what-happens-to-an-incoming-email-step-by-step)
+12. [What happens to an incoming Google Voice text, step by step](#what-happens-to-an-incoming-google-voice-text-step-by-step)
+13. [Owner command reference](#owner-command-reference)
+14. [The review queue](#the-review-queue)
+15. [Rule engines](#rule-engines)
+16. [The contact directory](#the-contact-directory)
+17. [Appointment scheduling](#appointment-scheduling)
+18. [Data files](#data-files)
+19. [Source file reference](#source-file-reference)
+20. [Testing](#testing)
+21. [Troubleshooting](#troubleshooting)
+22. [Security notes](#security-notes)
+23. [Known limitations](#known-limitations)
+24. [License](#license)
 
 ---
 
@@ -41,6 +43,8 @@ There is no cloud AI, no external API key, and no server. The model, the inbox c
 - **Takes commands from you** — either by texting your Google Voice admin number, or by emailing it directly from your own address — and acts on them: reply to something in the queue, add a rule, mark something as spam, pause everything, rename itself, and more. Commands are understood via natural language, not a fixed syntax.
 - **Builds a contact directory automatically** from everyone who emails or texts in, merged with your phone's real contacts, so it knows who's who and can apply per-person instructions ("never reply to X", "always reply to Mom").
 - **Applies rules** you define ("spam anything from *.marketing.com", "auto-reply to my boss") before ever generating a reply, so routine mail doesn't need AI or your attention at all.
+- **Takes on a business persona once you tell it who it works for.** Out of the box Aigentik is a generic personal assistant; tell it "the business name is Acme Restoration and we're a home improvement company specializing in water damage restoration" and every reply, signature, and Q&A answer afterward speaks as that business's secretary instead. See [Business identity and persona](#business-identity-and-persona).
+- **Asks for that setup information itself on first run**, by email, if it isn't set yet — no manual config file editing needed for the owner's name or business info. See [First-run onboarding](#first-run-onboarding).
 
 ## How it's built
 
@@ -217,9 +221,39 @@ tail -f ~/Aigentik-CLI/aigentik.log   # watch it live
 ./stop.sh                             # stop it
 ```
 
-On startup, in order: it starts (or confirms) `llama-server`, warms it up with a test completion, loads your profile (Aigentik's name, your name) from `data/profile.json`, does a one-time sync of your Android contacts, connects to Gmail and starts the IMAP IDLE watch, and finally emails you an "I'm online" notification. From then on it just sits in `IDLE`, woken up only by actual mailbox changes.
+On startup, in order: it starts (or confirms) `llama-server`, warms it up with a test completion, loads your profile (Aigentik's name, your name, business identity) from `data/profile.json` — creating it with everything but Aigentik's own name left blank if this is a fresh install — does a one-time sync of your Android contacts, connects to Gmail and starts the IMAP IDLE watch, and finally either emails you an "I'm online" notification, or, if the owner's name or business info is still missing, an onboarding request instead (see below). From then on it just sits in `IDLE`, woken up only by actual mailbox changes.
 
 Shutdown (`Ctrl+C` or `SIGTERM`) logs out of IMAP and closes the SMTP transporter cleanly before the process exits.
+
+## First-run onboarding
+
+`data/profile.json` isn't checked into git, so a brand-new install starts with no owner name and no business info — only Aigentik's own name (`Aigentik`) is set by default. On every startup, `index.js`'s `sendOnboardingEmail()` checks whether `owner_name` and/or `business_name` are still unset; if so, and it hasn't already sent this request (`profile.json`'s `onboarding_sent` flag), it emails `admin_email` asking for whichever is missing:
+
+> 👋 Hi! I'm Aigentik, your new AI assistant.
+>
+> Before I start replying to emails and texts on your behalf, I need a couple things:
+>
+> - Your name, so I know what to call you
+> - Your business name
+> - A short description of what your business does
+>
+> Just reply to this email in your own words, filling in the blanks...
+
+Reply to that email in plain language — e.g. *"My name is Sarah. The business is Acme Restoration, a home improvement company specializing in water damage restoration."* The reply is picked up by the normal admin-email path (see [Who Aigentik listens to as "the owner"](#who-aigentik-listens-to-as-the-owner)) and interpreted by the same natural-language command pipeline as everything else: `interpretCommand` (in `llama.js`) recognizes it as `set_business_info` (optionally carrying `owner_name` alongside it if you introduce yourself in the same message) or `set_owner_name` if you only give your name. Both get written to `profile.json` and applied immediately — no restart needed.
+
+The onboarding email is sent once per install, not on every restart (so a crash-loop doesn't spam the admin inbox), but the admin can answer it — or set/change either field later with an ordinary command — at any time; see [set_business_info in the owner command reference](#owner-command-reference). Your Android contacts are synced on every startup regardless of onboarding state (see [The contact directory](#the-contact-directory)), so a fresh install picks up your real contacts immediately even before you've answered the onboarding email.
+
+## Business identity and persona
+
+By default Aigentik is a generic personal assistant, replying "on behalf of [owner]" with no company affiliation. Once `business_name` is set (via onboarding or the `set_business_info` command — see [Owner command reference](#owner-command-reference)), it takes on that business's persona instead:
+
+- **Email and SMS replies** (`generateEmailReply`/`generateSmsReply` in `llama.js`) get an extra system-prompt clause — built by `businessContext()` — telling the model it works as the secretary/personal assistant for that business, optionally with a description of what the business does, so replies and any Q&A about "what do you do" answer in character.
+- **The intake acknowledgment** (`generateAcknowledgment`, used when opening the combined intake form for a fresh appointment request) gets the same business context instead of a hardcoded "home services business" assumption.
+- **Reply signatures switch too.** With no business set, replies sign off "`<Agent>` | Personal Agent of `<Owner>`" and mention reaching the owner by name for anything urgent. Once a business is set, they sign "`<Agent>` | `<Business>`" instead and drop the owner's personal name from the customer-facing signature entirely — anything urgent gets a generic "reply and we'll get back to you" instead.
+
+Check what's currently set anytime with `business info` / `company info` / `who do you work for`. Restating just a business name preserves its last-set description; naming a *different* business without a description clears the old one rather than inheriting it.
+
+Note: the appointment-negotiation templates (the closing reassurance line about "qualified technicians," the intake form wording) are still hardcoded for a home-improvement-style business and don't adapt to `business_description` — they happen to fit a business like Acme Restoration, but a business in an unrelated trade would want to edit `closingReassurance()` and `sendIntakeForm()` in `index.js` directly.
 
 ## The two communication channels
 
@@ -289,6 +323,7 @@ Say/text/email any of these to the admin number or `admin_email`. A handful of e
 | `sync contacts` / `refresh contacts` / `sync` | Re-sync from your phone's Android contacts |
 | `email [name] about [topic]` / `email [name] re [topic]` | Draft and send a fresh email to a saved contact |
 | `rename [name]` | Change what Aigentik calls itself |
+| `business info` / `company info` / `who do you work for` | Show the currently set business name/description |
 
 ### Natural-language commands
 
@@ -316,6 +351,8 @@ Everything else is sent to the local model with a short JSON schema to fill in, 
 | List appointments | `what's on my calendar` / `what's on my calendar today` / `... for next tuesday` / `... this week` | Shows upcoming appointments, or just the day/range you asked about |
 | Set working hours | `set working hours 9am to 5pm monday through friday` | Updates the hours Aigentik will book appointments within |
 | Set duration by role | `lawyers get 60 minute appointments` | Sets a default appointment length for contacts with that relationship label |
+| Set business identity | `the business name is Acme Restoration and we do home improvement, specializing in water damage restoration` | Sets `business_name`/`business_description` — see [Business identity and persona](#business-identity-and-persona). Can also set the owner's name in the same message, e.g. `my name is Sarah, the business is Acme Restoration...` |
+| Set owner's name only | `my name is Sarah` | Sets `owner_name` without touching business info — used when no business is being set |
 | Anything unrecognized | — | Falls back to a plain conversational reply from the model |
 
 ### Confirmation-gated (destructive) commands
@@ -401,7 +438,7 @@ Everything persistent lives under `data/` (configurable via `paths.data_dir`):
 | `calendar.json` | Appointment records — see [Appointment scheduling](#appointment-scheduling) |
 | `schedule-config.json` | Working hours, appointment buffer, booking window, and per-relationship durations |
 | `pending.json` | The review queue |
-| `profile.json` | Aigentik's chosen name, your name, setup date |
+| `profile.json` | Aigentik's chosen name, your name, business name/description, setup date, and whether the onboarding request has been sent |
 | `logs/` | Daily structured JSON logs (`aigentik-YYYY-MM-DD.log`), written by `logger.js` |
 | `conversations.json` | Reserved for future use — nothing currently reads or writes it |
 | `seen-sms-ids.json` | Left over from the removed direct-SMS-polling code path; nothing currently reads or writes it |
@@ -415,7 +452,7 @@ Everything persistent lives under `data/` (configurable via `paths.data_dir`):
 | `calendar.js` | The appointment calendar: working-hours/duration config, slot-finding, booking/reschedule/cancel, and deterministic (`chrono-node`-backed) natural-language date/time-range parsing |
 | `gmail.js` | Thin compatibility wrapper around `email-provider.js` so the rest of the app has a stable, simple API |
 | `owner-command.js` | Parses and executes every owner command, whether it arrived via Google Voice text or admin email |
-| `llama.js` | All calls to the local model: email/SMS reply generation, natural-language command interpretation, entity extraction, tone detection, general content generation |
+| `llama.js` | All calls to the local model: email/SMS reply generation, natural-language command interpretation, contact-detail extraction, tone detection, general content generation |
 | `email-rules.js` | The email rule engine, plus the promotional-content detector used by both rule matching and `spam all promotional` |
 | `sms-rules.js` | The Google Voice rule engine |
 | `contacts.js` | The contact directory: lookup, create, update, history, per-contact instructions |

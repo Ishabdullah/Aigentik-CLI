@@ -63,25 +63,69 @@ function handleRename(newName) {
   }
 }
 
+// Marks setup complete once both identity fields Aigentik asks for on
+// first run (see index.js's sendOnboardingEmail()) are known — informational
+// only, nothing currently branches on it, but keeps profile.json honest.
+function markConfiguredIfComplete(profile) {
+  if (profile.owner_name && profile.business_name) profile.configured = true;
+}
+
 // Set who the agent works for (business name) and what that business does,
 // so replies and Q&A take on that business's persona instead of a generic
 // personal-assistant one. Description is optional — the name alone is
-// enough to start using it in prompts.
-function handleSetBusinessInfo(businessName, businessDescription) {
+// enough to start using it in prompts. ownerName is optional too — set
+// together with the business when the same message introduces both (the
+// common case for the first-run onboarding reply — see index.js).
+function handleSetBusinessInfo(businessName, businessDescription, ownerName) {
   try {
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
+    const parts = [];
+
+    if (ownerName && !profile.owner_name) {
+      profile.owner_name = ownerName;
+      config.owner_name = ownerName;
+      parts.push(`I'll call you ${ownerName}`);
+    }
+
     // A description only carries over when re-stating the same business
     // name — naming a different business without a description shouldn't
     // silently inherit the old one's.
     if (businessName !== profile.business_name) profile.business_description = null;
     profile.business_name = businessName;
     if (businessDescription) profile.business_description = businessDescription;
-    fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
     config.business_name = profile.business_name;
     config.business_description = profile.business_description;
-    reply(`Got it — I now work as the secretary for ${businessName}` +
-      (profile.business_description ? `, ${profile.business_description}` : '') + `. 😊`);
-    log.action('owner-command', `Business info set: ${businessName} — ${profile.business_description || 'no description'}`);
+    parts.push(`I now work as the secretary for ${businessName}` +
+      (profile.business_description ? `, ${profile.business_description}` : ''));
+
+    markConfiguredIfComplete(profile);
+    fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
+    reply(`Got it — ${parts.join('. ')}. 😊`);
+    log.action('owner-command', `Business info set: ${businessName} — ${profile.business_description || 'no description'}` +
+      (ownerName ? `, owner: ${ownerName}` : ''));
+  } catch (e) {
+    reply('Sorry, I had trouble saving that. Try again.');
+  }
+}
+
+// Set only the owner's own name — used when the admin introduces themselves
+// without mentioning a business (e.g. a personal-assistant-only install).
+// Overwrites deliberately (this is also how an already-configured owner
+// corrects their name later), but always says what it replaced so an
+// unintended overwrite — e.g. the model misfiring on an unrelated message —
+// is obvious immediately rather than silent.
+function handleSetOwnerName(ownerName) {
+  try {
+    const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
+    const oldName = profile.owner_name;
+    profile.owner_name = ownerName;
+    markConfiguredIfComplete(profile);
+    fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
+    config.owner_name = ownerName;
+    reply(oldName && oldName !== ownerName
+      ? `Got it — I'll call you ${ownerName} instead of ${oldName}. 😊`
+      : `Got it — I'll call you ${ownerName}. 😊`);
+    log.action('owner-command', `Owner name set: ${ownerName}` + (oldName ? ` (was ${oldName})` : ''));
   } catch (e) {
     reply('Sorry, I had trouble saving that. Try again.');
   }
@@ -792,7 +836,17 @@ Return ONLY JSON.`;
         reply('What\'s the business name? Example: "the business name is Acme Restoration and we do home improvement, specializing in water damage restoration"');
         break;
       }
-      handleSetBusinessInfo(businessName, cmd.content);
+      handleSetBusinessInfo(businessName, cmd.content, cmd.owner_name);
+      break;
+    }
+
+    case 'set_owner_name': {
+      const ownerName = cmd.target;
+      if (!ownerName) {
+        reply('What\'s your name?');
+        break;
+      }
+      handleSetOwnerName(ownerName);
       break;
     }
 
