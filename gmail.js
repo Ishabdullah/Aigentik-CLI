@@ -1,4 +1,4 @@
-// gmail.js — Aigentik Gmail integration v2.0
+// gmail.js — Aigentik Gmail integration
 // Compatibility wrapper for EmailProvider
 // Preserves all existing public APIs while using modern imapflow backend
 

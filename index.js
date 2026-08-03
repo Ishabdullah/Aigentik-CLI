@@ -1,4 +1,4 @@
-// index.js — Aigentik v2.0
+// index.js — Aigentik
 // Communication: Gmail + Google Voice ONLY
 // No SMS sending or receiving via Termux
 // Admin: texts FROM 5551234567 TO 5559876543 (Google Voice), OR emails from
@@ -12,6 +12,7 @@ import path from 'path';
 
 import log from './logger.js';
 import config from './config.json' with { type: 'json' };
+import pkg from './package.json' with { type: 'json' };
 import * as llama from './llama.js';
 import * as gmail from './gmail.js';
 import * as ownerCommand from './owner-command.js';
@@ -829,7 +830,7 @@ async function shutdown(signal) {
 }
 
 async function main() {
-  console.log('\n🤖 Aigentik v2.0 — Starting up...\n');
+  console.log('\n🤖 Aigentik v' + pkg.version + ' — Starting up...\n');
 
   loadProfile();
 
@@ -870,7 +871,7 @@ async function main() {
   } else {
     const pending = queue.listQueue();
     await gmail.sendOwnerNotification(
-      '✅ ' + aigentikName + ' v2.0 is online!\n' +
+      '✅ ' + aigentikName + ' v' + pkg.version + ' is online!\n' +
       '📬 Pending: ' + pending.length + '\n' +
       '📧 Gmail: monitoring\n' +
       '💬 Google Voice: monitoring\n' +
@@ -882,8 +883,8 @@ async function main() {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  log.info('index', aigentikName + ' v2.0 fully started — Gmail/Google Voice only');
-  console.log('\n✅ ' + aigentikName + ' v2.0 running. Press Ctrl+C to stop.\n');
+  log.info('index', aigentikName + ' v' + pkg.version + ' fully started — Gmail/Google Voice only');
+  console.log('\n✅ ' + aigentikName + ' v' + pkg.version + ' running. Press Ctrl+C to stop.\n');
 }
 
 main().catch(e => {

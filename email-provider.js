@@ -1,4 +1,4 @@
-// email-provider.js — Aigentik Email Provider v2.0
+// email-provider.js — Aigentik Email Provider
 // Modern IMAP/SMTP implementation using imapflow and nodemailer 9.x
 // Features: async/await, auto-reconnect, exponential backoff, connection pooling,
 // structured logging, TLS validation, secure authentication
