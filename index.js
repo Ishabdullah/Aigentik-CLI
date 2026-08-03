@@ -165,20 +165,38 @@ function closingReassurance() {
   return "\n\nIf anything changes or you have any questions or concerns in the meantime, feel free to reach back out — we're happy to help or get you rebooked. We'll also give you a call before your appointment to confirm the time and make sure you get a chance to speak with one of our qualified technicians beforehand.";
 }
 
+// Name/phone/address live on the linked contact record (collected during
+// intake via applyExtractedDetails), not on the appointment itself — this
+// pulls them together so the admin gets full customer info on every booking
+// notification and invite, not just the name. Used for fresh bookings and
+// reschedules alike, since the admin needs the same details either way.
+function customerDetailBlock(appt, fallbackLabel, attendeeEmail) {
+  const bookedContact = appt.contact_id ? contacts.getContactById(appt.contact_id) : null;
+  const name = appt.attendee_name || bookedContact?.name || fallbackLabel;
+  const phone = bookedContact?.phones?.[0] || 'not on file';
+  const email = attendeeEmail || bookedContact?.emails?.[0] || appt.attendee_email || 'not on file';
+  const address = bookedContact?.address || 'not on file';
+  return `👤 Name: ${name}\n📞 Phone: ${phone}\n📧 Email: ${email}\n🏠 Address: ${address}`;
+}
+
 // Confirm a negotiation into a real booking, send invites, and reply with
 // the confirmation + closing reassurance — the single place this happens so
 // every path (fresh intake, time negotiation, reschedule) sounds the same.
 async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, senderLabel, reply }) {
   const typeLabel = negotiation.appointment_type === 'in_person' ? 'in-person appointment' : 'phone call';
   const appt = calendarModule.confirmNegotiation(negotiation.id, slot.start, slot.end);
+  const details = customerDetailBlock(appt, senderLabel, attendeeEmail);
   if (attendeeEmail) await gmail.sendCalendarInvite(appt, attendeeEmail);
-  await gmail.sendCalendarInvite(appt, adminEmail);
+  await gmail.sendCalendarInvite(appt, adminEmail,
+    `📅 New appointment booked: ${appt.title} at ${new Date(appt.start).toLocaleString()}.\n\n${details}`);
   await reply(
     `You're all set! ${typeLabel} on ${new Date(appt.start).toLocaleString()}.` +
     (attendeeEmail ? " I've sent a calendar invite." : '') +
     closingReassurance()
   );
-  await gmail.sendOwnerNotification(`📅 Appointment confirmed with ${appt.attendee_name || senderLabel} (${typeLabel}): ${new Date(appt.start).toLocaleString()}`);
+  await gmail.sendOwnerNotification(
+    `📅 Appointment confirmed with ${appt.attendee_name || senderLabel} (${typeLabel}): ${new Date(appt.start).toLocaleString()}\n\n${details}`
+  );
 }
 
 // Stage 1 of a fresh request: reply with one sentence naturally
@@ -361,10 +379,14 @@ async function handleRescheduleRequest({ classified, contact, reply, adminEmail,
 
   if (slot.start.getTime() === preferredDate.getTime()) {
     const updated = calendarModule.rescheduleAppointment(appt.id, slot.start, slot.end);
+    const details = customerDetailBlock(updated, contact?.name || senderLabel, updated.attendee_email);
     if (updated.attendee_email) await gmail.sendCalendarInvite(updated, updated.attendee_email);
-    await gmail.sendCalendarInvite(updated, adminEmail);
+    await gmail.sendCalendarInvite(updated, adminEmail,
+      `🔁 Appointment rescheduled: ${updated.title} now at ${new Date(updated.start).toLocaleString()}.\n\n${details}`);
     await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.${closingReassurance()}`);
-    await gmail.sendOwnerNotification(`🔁 Appointment rescheduled for ${contact?.name || senderLabel}: now ${new Date(updated.start).toLocaleString()}`);
+    await gmail.sendOwnerNotification(
+      `🔁 Appointment rescheduled for ${contact?.name || senderLabel}: now ${new Date(updated.start).toLocaleString()}\n\n${details}`
+    );
   } else {
     // Their requested new time isn't free either — recommend the nearest
     // alternative but leave the current booking intact until they agree.
@@ -397,10 +419,14 @@ async function handleRescheduleReply({ appt, text, reply, adminEmail, senderLabe
   if (slot.start.getTime() === requestedDate.getTime()) {
     const updated = calendarModule.rescheduleAppointment(appt.id, slot.start, slot.end);
     calendarModule.clearPendingReschedule(updated.id);
+    const details = customerDetailBlock(updated, senderLabel, updated.attendee_email);
     if (updated.attendee_email) await gmail.sendCalendarInvite(updated, updated.attendee_email);
-    await gmail.sendCalendarInvite(updated, adminEmail);
+    await gmail.sendCalendarInvite(updated, adminEmail,
+      `🔁 Appointment rescheduled: ${updated.title} now at ${new Date(updated.start).toLocaleString()}.\n\n${details}`);
     await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.${closingReassurance()}`);
-    await gmail.sendOwnerNotification(`🔁 Appointment rescheduled for ${senderLabel}: now ${new Date(updated.start).toLocaleString()}`);
+    await gmail.sendOwnerNotification(
+      `🔁 Appointment rescheduled for ${senderLabel}: now ${new Date(updated.start).toLocaleString()}\n\n${details}`
+    );
   } else {
     calendarModule.setPendingReschedule(appt.id, slot);
     await reply(`That time isn't available either — the soonest opening after that is ${new Date(slot.start).toLocaleString()}. Does that work?`);
