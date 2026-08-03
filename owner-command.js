@@ -63,6 +63,30 @@ function handleRename(newName) {
   }
 }
 
+// Set who the agent works for (business name) and what that business does,
+// so replies and Q&A take on that business's persona instead of a generic
+// personal-assistant one. Description is optional — the name alone is
+// enough to start using it in prompts.
+function handleSetBusinessInfo(businessName, businessDescription) {
+  try {
+    const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
+    // A description only carries over when re-stating the same business
+    // name — naming a different business without a description shouldn't
+    // silently inherit the old one's.
+    if (businessName !== profile.business_name) profile.business_description = null;
+    profile.business_name = businessName;
+    if (businessDescription) profile.business_description = businessDescription;
+    fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
+    config.business_name = profile.business_name;
+    config.business_description = profile.business_description;
+    reply(`Got it — I now work as the secretary for ${businessName}` +
+      (profile.business_description ? `, ${profile.business_description}` : '') + `. 😊`);
+    log.action('owner-command', `Business info set: ${businessName} — ${profile.business_description || 'no description'}`);
+  } catch (e) {
+    reply('Sorry, I had trouble saving that. Try again.');
+  }
+}
+
 // Main command handler — called for every SMS from Google Voice
 async function handleOwnerCommand(sms) {
   const text = sms.body?.trim();
@@ -130,6 +154,17 @@ async function handleOwnerCommand(sms) {
   if (lower === 'contacts' || lower === 'list contacts') {
     const list = contacts.listContacts();
     reply(`📒 Contacts:\n${list}`);
+    return;
+  }
+
+  // Show current business identity
+  if (lower === 'business info' || lower === 'company info' || lower === 'who do you work for') {
+    if (config.business_name) {
+      reply(`🏢 I work for ${config.business_name}` +
+        (config.business_description ? `, ${config.business_description}` : ' (no description set)') + `.`);
+    } else {
+      reply('No business set yet. Tell me who I work for, e.g. "the business name is Acme Restoration and we do home improvement, specializing in water damage restoration"');
+    }
     return;
   }
 
@@ -748,6 +783,16 @@ Return ONLY JSON.`;
       calendarModule.setDurationForRelationship(relationship, minutes);
       reply(`✅ ${relationship} appointments are now ${minutes} minutes by default.`);
       log.action('owner-command', `Duration set for ${relationship}: ${minutes}min`);
+      break;
+    }
+
+    case 'set_business_info': {
+      const businessName = cmd.target;
+      if (!businessName) {
+        reply('What\'s the business name? Example: "the business name is Acme Restoration and we do home improvement, specializing in water damage restoration"');
+        break;
+      }
+      handleSetBusinessInfo(businessName, cmd.content);
       break;
     }
 

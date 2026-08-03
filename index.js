@@ -48,9 +48,13 @@ function loadProfile() {
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
     config.aigentik_name = profile.aigentik_name || 'Aigentik';
     config.owner_name = profile.owner_name || 'Ish';
+    config.business_name = profile.business_name || null;
+    config.business_description = profile.business_description || null;
   } catch (e) {
     config.aigentik_name = 'Aigentik';
     config.owner_name = 'Ish';
+    config.business_name = null;
+    config.business_description = null;
   }
 }
 
@@ -168,7 +172,7 @@ async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, s
 async function sendIntakeForm({ negotiation, text, reply }) {
   let acknowledgment = '';
   try {
-    acknowledgment = await llama.generateAcknowledgment(text, config.aigentik_name);
+    acknowledgment = await llama.generateAcknowledgment(text, config.aigentik_name, config.business_name, config.business_description);
   } catch (e) {
     log.error('index', 'Failed to generate acknowledgment', { error: e.message });
   }
@@ -484,6 +488,8 @@ async function handleGoogleVoiceText(email) {
 
   const ownerName = config.owner_name || 'Ish';
   const agentName = config.aigentik_name || 'Aigentik';
+  const businessName = config.business_name || null;
+  const businessDescription = config.business_description || null;
   const adminPhone = config.owner.admin_number.replace(/[^0-9]/g, '').slice(-10);
   const senderNorm = voiceMsg.sender_phone.replace(/[^0-9]/g, '').slice(-10);
 
@@ -558,7 +564,9 @@ async function handleGoogleVoiceText(email) {
       contact?.relationship,
       contact?.instructions,
       ownerName,
-      agentName
+      agentName,
+      businessName,
+      businessDescription
     );
 
     if (shouldAutoReply) {
@@ -668,6 +676,8 @@ async function handleNewEmail(email) {
 
   const ownerName = config.owner_name || 'Ish';
   const agentName = config.aigentik_name || 'Aigentik';
+  const businessName = config.business_name || null;
+  const businessDescription = config.business_description || null;
 
   if (action === 'spam') {
     await gmail.markAsSpam({ from: email.from_email });
@@ -694,7 +704,8 @@ async function handleNewEmail(email) {
       email.from_name, email.from_email, email.subject,
       email.body?.substring(0, 1000),
       contact?.relationship, contact?.instructions,
-      ownerName, agentName
+      ownerName, agentName,
+      businessName, businessDescription
     );
 
     if (action === 'auto-reply') {

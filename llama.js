@@ -26,17 +26,34 @@ async function chat(messages, maxTokens = MAX_TOKENS) {
   }
 }
 
-async function generateEmailReply(senderName, senderEmail, subject, body, relationship, contactInstructions, ownerName, agentName) {
+// Builds the "who this agent works for and what that business does" clause
+// shared by every persona-facing prompt, so the model stays in character as
+// the business's secretary/assistant instead of a generic personal AI once
+// the owner has told it who it works for.
+function businessContext(businessName, businessDescription) {
+  if (!businessName) return '';
+  return ' You work as the secretary and personal assistant for ' + businessName +
+    (businessDescription ? ', ' + businessDescription : '') + '.';
+}
+
+async function generateEmailReply(senderName, senderEmail, subject, body, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription) {
   const agent = agentName || config.aigentik_name || 'Axon';
   const owner = ownerName || 'my owner';
-  const signature = '\n\n---\n' + agent + ' | Personal Agent of ' + owner + '\nIf you need to reach ' + owner + ' urgently, include "' + owner + '" in your subject line.';
+  // Once a business is set, the signature identifies the agent as that
+  // business's secretary rather than surfacing the owner's personal name to
+  // customers — the owner's name stays internal (used only in the system
+  // prompt) once there's a business persona to front instead.
+  const signature = businessName
+    ? '\n\n---\n' + agent + ' | ' + businessName + '\nFor anything urgent, please reply directly and we\'ll get back to you as soon as possible.'
+    : '\n\n---\n' + agent + ' | Personal Agent of ' + owner + '\nIf you need to reach ' + owner + ' urgently, include "' + owner + '" in your subject line.';
 
   let instructionText = '';
   if (contactInstructions) {
     instructionText = 'IMPORTANT: Special instructions for this contact: ' + contactInstructions;
   }
 
-  const systemMsg = 'You are ' + agent + ', an AI personal assistant managing email on behalf of ' + owner + '. ' +
+  const systemMsg = 'You are ' + agent + ', an AI personal assistant managing email on behalf of ' + owner + '.' +
+    businessContext(businessName, businessDescription) + ' ' +
     'You are replying to an email sent TO ' + owner + ' from ' + (senderName || senderEmail) + '. ' +
     'Write a professional, natural email reply as ' + agent + ' on behalf of ' + owner + '. ' +
     'Relationship to owner: ' + (relationship || 'unknown') + '. ' +
@@ -56,17 +73,20 @@ async function generateEmailReply(senderName, senderEmail, subject, body, relati
   return reply + signature;
 }
 
-async function generateSmsReply(senderNumber, senderName, message, tone, relationship, contactInstructions, ownerName, agentName) {
+async function generateSmsReply(senderNumber, senderName, message, tone, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription) {
   const agent = agentName || config.aigentik_name || 'Axon';
   const owner = ownerName || 'my owner';
-  const signature = '\n\n— ' + agent + ', personal agent of ' + owner + '. If you need to reach ' + owner + ' urgently, reply with "' + owner + '" in your message.';
+  const signature = businessName
+    ? '\n\n— ' + agent + ', ' + businessName + '. For anything urgent, just reply and we\'ll get back to you ASAP.'
+    : '\n\n— ' + agent + ', personal agent of ' + owner + '. If you need to reach ' + owner + ' urgently, reply with "' + owner + '" in your message.';
 
   let instructionText = '';
   if (contactInstructions) {
     instructionText = 'IMPORTANT: Special instructions for this contact: ' + contactInstructions;
   }
 
-  const systemMsg = 'You are ' + agent + ', an AI personal assistant managing communications on behalf of ' + owner + '. ' +
+  const systemMsg = 'You are ' + agent + ', an AI personal assistant managing communications on behalf of ' + owner + '.' +
+    businessContext(businessName, businessDescription) + ' ' +
     'You are replying to a message sent TO ' + owner + ' from ' + (senderName || senderNumber) + '. ' +
     'Write a natural, helpful reply as ' + agent + ' on behalf of ' + owner + '. ' +
     'Match the tone: ' + (tone || 'neutral') + '. ' +
@@ -89,9 +109,9 @@ async function generateSmsReply(senderNumber, senderName, message, tone, relatio
 }
 
 async function interpretCommand(commandText, context) {
-  const actions = 'send_email, send_sms, list_pending, approve_reply, edit_reply, skip_item, spam_item, add_rule, remove_rule, list_rules, list_contacts, find_contact, add_contact, update_contact, delete_contact, set_contact_instructions, never_reply_to, always_reply_to, pause_all, pause_email, pause_sms, resume_all, resume_email, resume_sms, status, generate_content, delete_all_emails, archive_all_emails, spam_all_promotional, clean_inbox, sync_contacts, schedule_appointment, reschedule_appointment, cancel_appointment, list_appointments, set_working_hours, set_appointment_duration, unknown';
+  const actions = 'send_email, send_sms, list_pending, approve_reply, edit_reply, skip_item, spam_item, add_rule, remove_rule, list_rules, list_contacts, find_contact, add_contact, update_contact, delete_contact, set_contact_instructions, never_reply_to, always_reply_to, pause_all, pause_email, pause_sms, resume_all, resume_email, resume_sms, status, generate_content, delete_all_emails, archive_all_emails, spam_all_promotional, clean_inbox, sync_contacts, schedule_appointment, reschedule_appointment, cancel_appointment, list_appointments, set_working_hours, set_appointment_duration, set_business_info, unknown';
   const schema = '{"action":"string","target":"string|null","content":"string|null","item_id":"number|null","rule_type":"string|null","rule_description":"string|null","contact_field":"string|null","contact_value":"string|null","confirm_required":false}';
-  const systemMsg = 'You interpret natural language commands for an AI assistant. Return ONLY valid JSON: ' + schema + ' Actions: ' + actions + ' contact_field is one of "name","phone","email","address","relationship","notes" and is used with add_contact/update_contact along with contact_value. For schedule_appointment/reschedule_appointment, target is the contact name and content is the natural-language date/time phrase verbatim (e.g. "next tuesday at 2pm"). For set_working_hours, content is the natural-language hours/days phrase verbatim, whether setting hours (e.g. "9am to 5pm monday through friday") or marking a day off (e.g. "I don\'t work on Sundays", "closed on weekends") — both go to the same action. For set_appointment_duration, rule_type is the relationship/role (e.g. "lawyer") and content is the duration in minutes as a string (e.g. "60"). Examples: "text mom I love her"={"action":"send_sms","target":"mom","content":"I love her"} "email boss about the meeting"={"action":"send_email","target":"boss","content":"the meeting"} "find Mike"={"action":"find_contact","target":"Mike"} "delete all emails"={"action":"delete_all_emails"} "pause"={"action":"pause_all"} "save email john@x.com to Mike"={"action":"update_contact","target":"Mike","contact_field":"email","contact_value":"john@x.com"} "change Mike\'s name to Michael"={"action":"update_contact","target":"Mike","contact_field":"name","contact_value":"Michael"} "add contact Sarah phone 5551234567"={"action":"add_contact","target":"Sarah","contact_field":"phone","contact_value":"5551234567"} "delete contact Sarah"={"action":"delete_contact","target":"Sarah"} "book John for next tuesday at 2pm"={"action":"schedule_appointment","target":"John","content":"next tuesday at 2pm"} "move John\'s appointment to friday 3pm"={"action":"reschedule_appointment","target":"John","content":"friday 3pm"} "cancel John\'s appointment"={"action":"cancel_appointment","target":"John"} "what\'s on my calendar this week"={"action":"list_appointments","content":"this week"} "what\'s on my calendar today"={"action":"list_appointments","content":"today"} "what\'s on my calendar for next tuesday"={"action":"list_appointments","content":"next tuesday"} "set working hours 9 to 5 monday through friday"={"action":"set_working_hours","content":"9am to 5pm monday through friday"} "I don\'t work on Sundays"={"action":"set_working_hours","content":"I don\'t work on Sundays"} "lawyers get 60 minute appointments"={"action":"set_appointment_duration","rule_type":"lawyer","content":"60"}';
+  const systemMsg = 'You interpret natural language commands for an AI assistant. Return ONLY valid JSON: ' + schema + ' Actions: ' + actions + ' contact_field is one of "name","phone","email","address","relationship","notes" and is used with add_contact/update_contact along with contact_value. For schedule_appointment/reschedule_appointment, target is the contact name and content is the natural-language date/time phrase verbatim (e.g. "next tuesday at 2pm"). For set_working_hours, content is the natural-language hours/days phrase verbatim, whether setting hours (e.g. "9am to 5pm monday through friday") or marking a day off (e.g. "I don\'t work on Sundays", "closed on weekends") — both go to the same action. For set_appointment_duration, rule_type is the relationship/role (e.g. "lawyer") and content is the duration in minutes as a string (e.g. "60"). For set_business_info, target is the business/company name and content is a short description of what the business does, verbatim from what was said (e.g. "a home improvement company specializing in kitchen remodels"); if only a name is given with no description, content is null. Examples: "text mom I love her"={"action":"send_sms","target":"mom","content":"I love her"} "email boss about the meeting"={"action":"send_email","target":"boss","content":"the meeting"} "find Mike"={"action":"find_contact","target":"Mike"} "delete all emails"={"action":"delete_all_emails"} "pause"={"action":"pause_all"} "save email john@x.com to Mike"={"action":"update_contact","target":"Mike","contact_field":"email","contact_value":"john@x.com"} "change Mike\'s name to Michael"={"action":"update_contact","target":"Mike","contact_field":"name","contact_value":"Michael"} "add contact Sarah phone 5551234567"={"action":"add_contact","target":"Sarah","contact_field":"phone","contact_value":"5551234567"} "delete contact Sarah"={"action":"delete_contact","target":"Sarah"} "book John for next tuesday at 2pm"={"action":"schedule_appointment","target":"John","content":"next tuesday at 2pm"} "move John\'s appointment to friday 3pm"={"action":"reschedule_appointment","target":"John","content":"friday 3pm"} "cancel John\'s appointment"={"action":"cancel_appointment","target":"John"} "what\'s on my calendar this week"={"action":"list_appointments","content":"this week"} "what\'s on my calendar today"={"action":"list_appointments","content":"today"} "what\'s on my calendar for next tuesday"={"action":"list_appointments","content":"next tuesday"} "set working hours 9 to 5 monday through friday"={"action":"set_working_hours","content":"9am to 5pm monday through friday"} "I don\'t work on Sundays"={"action":"set_working_hours","content":"I don\'t work on Sundays"} "lawyers get 60 minute appointments"={"action":"set_appointment_duration","rule_type":"lawyer","content":"60"} "the business name is Acme Restoration and we are a home improvement business who specializes in water damage restoration"={"action":"set_business_info","target":"Acme Restoration","content":"a home improvement business specializing in water damage restoration"} "we work for Bright Smiles Dental, a family dentistry practice"={"action":"set_business_info","target":"Bright Smiles Dental","content":"a family dentistry practice"} "our business is called Acme Plumbing"={"action":"set_business_info","target":"Acme Plumbing","content":null}';
   const userMsg = 'Command: "' + commandText + '"\nContext: ' + JSON.stringify(context || {});
   const messages = [
     { role: 'system', content: systemMsg },
@@ -139,11 +159,11 @@ async function classifySchedulingIntent(text, context) {
 // One short, contextual sentence acknowledging what someone actually asked
 // for — used to open the intake-form reply so it doesn't read as a canned
 // form dropped on top of their message with no reference to what they said.
-async function generateAcknowledgment(text, agentName) {
+async function generateAcknowledgment(text, agentName, businessName, businessDescription) {
   const messages = [
     {
       role: 'system',
-      content: `You are ${agentName || 'an assistant'} for a home services business. Someone just reached out. Write ONE short, warm, professional sentence acknowledging their specific request or situation — reference what they actually said, don't be generic. No greeting, no signature, just that one sentence.`
+      content: `You are ${agentName || 'an assistant'}.${businessContext(businessName, businessDescription)} Someone just reached out. Write ONE short, warm, professional sentence acknowledging their specific request or situation — reference what they actually said, don't be generic. No greeting, no signature, just that one sentence.`
     },
     { role: 'user', content: text }
   ];
