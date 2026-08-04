@@ -681,9 +681,11 @@ class EmailProvider {
    * Parse Google Voice forwarded email into SMS-like object
    */
   parseGoogleVoiceEmail(email) {
-    // Match both "New text message from" and "New group text message from"
+    // Match both "New text message from" and "New group text message from".
+    // The name is optional — Google Voice omits it for numbers with no saved
+    // contact name, giving a subject like "New text message from (555) 123-4567".
     const subjectMatch = email.subject?.match(
-      /New (?:group )?text message from (.+?)\s*\((\d{3})\)\s*(\d{3})-(\d{4})/
+      /New (?:group )?text message from (?:(.+?)\s*)?\((\d{3})\)\s*(\d{3})-(\d{4})/
     );
 
     let senderName = null;
