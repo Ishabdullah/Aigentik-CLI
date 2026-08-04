@@ -692,7 +692,7 @@ class EmailProvider {
     let senderPhone = null;
 
     if (subjectMatch) {
-      senderName = subjectMatch[1].trim();
+      senderName = subjectMatch[1] ? subjectMatch[1].trim() : null;
       senderPhone = subjectMatch[2] + subjectMatch[3] + subjectMatch[4];
     }
 
