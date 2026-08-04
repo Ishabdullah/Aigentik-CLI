@@ -519,7 +519,7 @@ function updateNegotiationOffers(id, offeredSlots) {
   return appointments[idx];
 }
 
-function confirmNegotiation(id, start, end) {
+function confirmNegotiation(id, start, end, attendeeEmail) {
   const appointments = loadCalendar();
   const idx = appointments.findIndex(a => a.id === id);
   if (idx === -1) return null;
@@ -528,6 +528,7 @@ function confirmNegotiation(id, start, end) {
   appointments[idx].start = new Date(start).toISOString();
   appointments[idx].end = new Date(end).toISOString();
   appointments[idx].offered_slots = [];
+  if (attendeeEmail) appointments[idx].attendee_email = attendeeEmail;
   appointments[idx].updated_at = new Date().toISOString();
   appointments[idx].history.push({ event: 'confirmed', at: appointments[idx].updated_at });
 

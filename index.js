@@ -167,6 +167,13 @@ function closingReassurance() {
   return "\n\nIf anything changes or you have any questions or concerns in the meantime, feel free to reach back out — we're happy to help or get you rebooked. We'll also give you a call before your appointment to confirm the time and make sure you get a chance to speak with one of our qualified technicians beforehand.";
 }
 
+// Calendar invite emails routinely land in spam for a first-time sender, so
+// every message that claims to have sent one tells the customer where to
+// look if it doesn't show up in their inbox.
+function inviteSentNote() {
+  return " I've sent a calendar invite to your email — if you don't see it in a few minutes, check your spam folder.";
+}
+
 // Name/phone/address live on the linked contact record (collected during
 // intake via applyExtractedDetails), not on the appointment itself — this
 // pulls them together so the admin gets full customer info on every booking
@@ -186,14 +193,14 @@ function customerDetailBlock(appt, fallbackLabel, attendeeEmail) {
 // every path (fresh intake, time negotiation, reschedule) sounds the same.
 async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, senderLabel, reply }) {
   const typeLabel = negotiation.appointment_type === 'in_person' ? 'in-person appointment' : 'phone call';
-  const appt = calendarModule.confirmNegotiation(negotiation.id, slot.start, slot.end);
+  const appt = calendarModule.confirmNegotiation(negotiation.id, slot.start, slot.end, attendeeEmail);
   const details = customerDetailBlock(appt, senderLabel, attendeeEmail);
   if (attendeeEmail) await gmail.sendCalendarInvite(appt, attendeeEmail);
   await gmail.sendCalendarInvite(appt, adminEmail,
     `📅 New appointment booked: ${appt.title} at ${new Date(appt.start).toLocaleString()}.\n\n${details}`);
   await reply(
     `You're all set! ${typeLabel} on ${new Date(appt.start).toLocaleString()}.` +
-    (attendeeEmail ? " I've sent a calendar invite." : '') +
+    (attendeeEmail ? inviteSentNote() : '') +
     closingReassurance()
   );
   await gmail.sendOwnerNotification(
@@ -422,7 +429,11 @@ async function handleRescheduleRequest({ classified, contact, reply, adminEmail,
     if (updated.attendee_email) await gmail.sendCalendarInvite(updated, updated.attendee_email);
     await gmail.sendCalendarInvite(updated, adminEmail,
       `🔁 Appointment rescheduled: ${updated.title} now at ${new Date(updated.start).toLocaleString()}.\n\n${details}`);
-    await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.${closingReassurance()}`);
+    await reply(
+      `Got it — moved to ${new Date(updated.start).toLocaleString()}.` +
+      (updated.attendee_email ? inviteSentNote() : ' Updated invite sent.') +
+      closingReassurance()
+    );
     await gmail.sendOwnerNotification(
       `🔁 Appointment rescheduled for ${contact?.name || senderLabel}: now ${new Date(updated.start).toLocaleString()}\n\n${details}`
     );
@@ -462,7 +473,11 @@ async function handleRescheduleReply({ appt, text, reply, adminEmail, senderLabe
     if (updated.attendee_email) await gmail.sendCalendarInvite(updated, updated.attendee_email);
     await gmail.sendCalendarInvite(updated, adminEmail,
       `🔁 Appointment rescheduled: ${updated.title} now at ${new Date(updated.start).toLocaleString()}.\n\n${details}`);
-    await reply(`Got it — moved to ${new Date(updated.start).toLocaleString()}. Updated invite sent.${closingReassurance()}`);
+    await reply(
+      `Got it — moved to ${new Date(updated.start).toLocaleString()}.` +
+      (updated.attendee_email ? inviteSentNote() : ' Updated invite sent.') +
+      closingReassurance()
+    );
     await gmail.sendOwnerNotification(
       `🔁 Appointment rescheduled for ${senderLabel}: now ${new Date(updated.start).toLocaleString()}\n\n${details}`
     );
