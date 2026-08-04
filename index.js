@@ -1,9 +1,10 @@
 // index.js — Aigentik
 // Communication: Gmail + Google Voice ONLY
 // No SMS sending or receiving via Termux
-// Admin: texts FROM 5551234567 TO 5559876543 (Google Voice), OR emails from
-// owner.admin_email directly — both are routed to the same command handler.
-// Public: anyone texts 5559876543 (Google Voice)
+// Admin: texts FROM owner.admin_number TO owner.aigentik_number (Google Voice),
+// OR emails from owner.admin_email directly — both are routed to the same
+// command handler.
+// Public: anyone texts owner.aigentik_number (Google Voice)
 // All routing via Gmail IMAP IDLE
 
 import { execSync, spawn } from 'child_process';
@@ -873,10 +874,9 @@ async function main() {
     await gmail.sendOwnerNotification(
       '✅ ' + aigentikName + ' v' + pkg.version + ' is online!\n' +
       '📬 Pending: ' + pending.length + '\n' +
-      '📧 Gmail: monitoring\n' +
-      '💬 Google Voice: monitoring\n' +
-      '📵 SMS: disabled\n\n' +
-      'Text me at 5559876543 from your 9332 number to give commands!'
+      '📧 Email: ' + (config.behavior.pause_email ? 'paused' : 'monitoring') + '\n' +
+      '💬 Google Voice (texting): ' + (config.behavior.pause_sms ? 'paused' : 'monitoring') + '\n\n' +
+      'Text me at ' + config.owner.aigentik_number_formatted + ' from your ' + config.owner.admin_number_formatted + ' number to give commands!'
     );
   }
 
