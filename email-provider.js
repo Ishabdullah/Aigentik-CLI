@@ -721,11 +721,17 @@ class EmailProvider {
   async replyToGoogleVoiceText(voiceMessage, replyText) {
     const transporter = this.getTransporter();
     try {
+      // Google Voice's email-to-SMS relay only delivers the text up through
+      // the first blank line, silently dropping everything after it (it
+      // reads a blank line as a quote/signature boundary). Collapse blank
+      // lines so multi-paragraph replies (e.g. the scheduling intake form)
+      // actually arrive in full as a text.
+      const smsText = replyText.replace(/\n{2,}/g, '\n');
       await transporter.sendMail({
         from: this.config.gmail.email,
         to: voiceMessage.reply_to_email,
         subject: 'Re: ' + voiceMessage.original_subject,
-        text: replyText
+        text: smsText
       });
       this.logger.action('email-provider', 'Google Voice reply sent', {
         to: voiceMessage.sender_name

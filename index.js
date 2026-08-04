@@ -236,15 +236,13 @@ async function sendIntakeForm({ negotiation, text, reply }) {
 // out of the same message in one pass — someone who answers everything at
 // once skips straight to booking; anyone missing something just gets asked
 // for what's still missing, not the whole form again.
-async function processIntakeReply({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel }) {
-  if (!negotiation.appointment_type) {
-    const detectedType = calendarModule.detectAppointmentTypeFromText(text);
-    if (detectedType) negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
-  }
+async function processIntakeReply({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel }) {
+  const detectedType = negotiation.appointment_type ? null : calendarModule.detectAppointmentTypeFromText(text);
+  if (detectedType) negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
 
   let extracted = {};
   try {
-    extracted = await llama.extractContactDetails(text, ['name', 'phone', 'address', 'concerns']);
+    extracted = await llama.extractContactDetails(text, ['name', 'email', 'phone', 'address', 'concerns']);
   } catch (e) {
     log.error('index', 'Failed to extract intake reply', { error: e.message });
   }
@@ -260,7 +258,46 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
     const asks = [];
     if (stillNeedsType) asks.push("whether you'd like a phone call or an in-person visit");
     if (missing.length > 0) asks.push(`your ${missing.join(', ')}`);
-    await reply(`Thanks! Before I can get this scheduled, could you also share ${asks.join(' and ')}?`);
+    const ask = `Before I can get this scheduled, could you also share ${asks.join(' and ')}?`;
+
+    // If the message didn't actually contribute anything toward the intake
+    // (no field extracted, no type detected, no date/time parsed), it's
+    // likely an unrelated question rather than a partial answer to the
+    // form — answer it for real instead of silently ignoring it and just
+    // repeating the outstanding ask.
+    const contributedNothing = !detectedType &&
+      !Object.values(extracted || {}).some(v => v) &&
+      !calendarModule.parseDatetimePhrase(text);
+
+    if (contributedNothing) {
+      let answer = '';
+      try {
+        const ownerName = config.owner_name || null;
+        const agentName = config.aigentik_name || 'Aigentik';
+        const businessName = config.business_name || null;
+        const businessDescription = config.business_description || null;
+        if (channel === 'email') {
+          answer = await llama.generateEmailReply(
+            senderLabel, target, subject, text,
+            freshContact?.relationship, freshContact?.instructions,
+            ownerName, agentName, businessName, businessDescription
+          );
+        } else {
+          const detectedTone = await tone.detectTone(text);
+          answer = await llama.generateSmsReply(
+            voiceMsg?.sender_phone, voiceMsg?.sender_name, text, detectedTone,
+            freshContact?.relationship, freshContact?.instructions,
+            ownerName, agentName, businessName, businessDescription
+          );
+        }
+      } catch (e) {
+        log.error('index', 'Failed to generate answer for off-topic intake reply', { error: e.message });
+      }
+      await reply(answer ? `${answer}\n\n${ask}` : `Thanks! ${ask}`);
+      return true;
+    }
+
+    await reply(`Thanks! ${ask}`);
     return true;
   }
 
@@ -340,12 +377,12 @@ async function negotiateTime({ negotiation, text, adminEmail, senderLabel, reply
 //   2. Process their reply to it — extract everything at once, ask only for
 //      whatever's still missing, then offer times or check a time they gave.
 //   3. Once a time's been offered, pure back-and-forth on picking one.
-async function advanceScheduling({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel }) {
+async function advanceScheduling({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel }) {
   if (!negotiation.form_sent) {
     return await sendIntakeForm({ negotiation, text, reply });
   }
   if (negotiation.offered_slots.length === 0) {
-    return await processIntakeReply({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel });
+    return await processIntakeReply({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel });
   }
   return await negotiateTime({ negotiation, text, adminEmail, senderLabel, reply });
 }
@@ -476,7 +513,7 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
   // there unconditionally rather than gating on a keyword match.
   const activeNegotiation = contact?.id ? calendarModule.findNegotiationsByContact(contact.id)[0] : null;
   if (activeNegotiation) {
-    return await advanceScheduling({ negotiation: activeNegotiation, text, contact, channel, target, reply, adminEmail, senderLabel });
+    return await advanceScheduling({ negotiation: activeNegotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel });
   }
 
   const confirmedAppts = contact?.id ? calendarModule.findAppointmentsByContact(contact.id) : [];
@@ -507,7 +544,7 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
       attendeeEmail: channel === 'email' ? target : (contact?.emails?.[0] || null),
       createdVia: channel
     });
-    return await advanceScheduling({ negotiation, text, contact, channel, target, reply, adminEmail, senderLabel });
+    return await advanceScheduling({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel });
   }
   if (classified.intent === 'cancel_appointment') {
     return await handleCancelRequest({ classified, contact, reply, adminEmail, senderLabel });
