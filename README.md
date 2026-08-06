@@ -15,6 +15,7 @@ It can:
 - Take commands from you in plain English, by text or email — reply to something, add a rule, pause everything, rename itself, and more
 - Manage appointments end-to-end — negotiate a time, book it, send a real calendar invite, handle reschedules and cancellations
 - Maintain a contact directory that builds itself from everyone who reaches out
+- Recognize subcontractor application lead-forms automatically — track trade, license, insurance, and crew info, and answer "list my plumbers" (or any trade)
 - Apply automation rules so routine mail never needs AI or your attention
 - Take on a business persona once you tell it who it works for
 
@@ -50,7 +51,7 @@ The goal is simple: **build an AI assistant you own instead of renting one forev
 - Google Voice SMS handling through the same inbox
 - Automatic replies, with a human-approval queue for anything not auto-sent
 - Natural-language command control — no fixed syntax, control it by texting or emailing it directly
-- Contact intelligence — builds and enriches its own directory automatically
+- Contact intelligence — builds and enriches its own directory automatically, including a distinct subcontractor type with trade/license/insurance tracking
 - Business identity/persona — speaks as your business once you tell it who you are
 - Appointment scheduling with real calendar invites (`.ics`), no calendar API or OAuth
 - Rule engine automation for email and SMS (spam/auto-reply/review)
@@ -68,6 +69,7 @@ flowchart TB
             LLM["llama.js\nAI calls"]
             CT["contacts.js\ncontacts-sync.js"]
             CAL["calendar.js\nappointment booking"]
+            SC["subcontractor-form.js\ntrades.js"]
             Q["queue.js"]
             OC["owner-command.js"]
         end
@@ -85,6 +87,8 @@ flowchart TB
     LLM <--> LS
     GM --> CT
     GM --> CAL
+    GM --> SC
+    SC --> CT
     CAL -. ".ics invite/cancel email" .-> GMAIL
     RULES --> Q
     Q --> OC
@@ -108,6 +112,7 @@ Everything runs as one long-lived Node.js process with a single IMAP connection 
 | Gmail automation | Yes | Limited |
 | Google Voice support | Yes | Rare |
 | Custom business persona | Yes | Limited |
+| Subcontractor application tracking | Yes | Rare |
 
 ## Quick Start
 
