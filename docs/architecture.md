@@ -27,6 +27,7 @@ flowchart TB
             LLM["llama.js\nAI calls"]
             CT["contacts.js\ncontacts-sync.js"]
             CAL["calendar.js\nappointment booking"]
+            SC["subcontractor-form.js\ntrades.js"]
             Q["queue.js"]
             OC["owner-command.js"]
         end
@@ -44,6 +45,8 @@ flowchart TB
     LLM <--> LS
     GM --> CT
     GM --> CAL
+    GM --> SC
+    SC --> CT
     CAL -. ".ics invite/cancel email" .-> GMAIL
     RULES --> Q
     Q --> OC
@@ -90,7 +93,7 @@ For the email path specifically: if you reply to one of Aigentik's own notificat
 ## What happens to an incoming email, step by step
 
 1. **IMAP IDLE fires.** `email-provider.js` fetches the new message(s), marks each seen by UID, and calls back into `index.js` with the parsed email.
-2. **Sender check.** If it's from Aigentik's own address, it's ignored (this is what stops "I sent myself a copy" or notification loops). If it's a Google Voice forwarded text, it's routed to the Google Voice handler instead (see below). If it's from `admin_email`, it's routed to the owner-command handler instead (see above). Otherwise, it's a normal inbound email and processing continues.
+2. **Sender check.** If it's from Aigentik's own address, it's ignored (this is what stops "I sent myself a copy" or notification loops). If it's a Google Voice forwarded text, it's routed to the Google Voice handler instead (see below). If it's a subcontractor application lead-form (`subcontractor-form.js`'s `isSubcontractorApplication`), it's routed to its own handler — parsed deterministically, saved as a `type: "subcontractor"` contact, and acknowledged with a subcontractor-specific reply, never the customer flow below (see [The contact directory](contacts.md)). If it's from `admin_email`, it's routed to the owner-command handler instead (see above). Otherwise, it's a normal inbound email and processing continues.
 3. **Contact lookup.** `contacts.findOrCreateByEmail` either finds the sender in the contact directory or creates a new entry, and a history entry is recorded against it.
 4. **Rule check.** `email-rules.js` checks the sender, subject, and body against your saved rules, in order, first match wins. If nothing matches, the configured default (`behavior.default_unmatched_action`, normally `auto-reply`) applies. See [Rule engines](rules.md).
 5. **If the rule action is `spam`**, the sender's mail is moved to Gmail's Spam folder and nothing else happens.
@@ -117,11 +120,13 @@ For the email path specifically: if you reply to one of Aigentik's own notificat
 | `calendar.js` | The appointment calendar: working-hours/duration config, slot-finding, booking/reschedule/cancel, and deterministic (`chrono-node`-backed) natural-language date/time-range parsing |
 | `gmail.js` | Thin compatibility wrapper around `email-provider.js` so the rest of the app has a stable, simple API |
 | `owner-command.js` | Parses and executes every owner command, whether it arrived via Google Voice text or admin email |
-| `llama.js` | All calls to the local model: email/SMS reply generation, natural-language command interpretation, contact-detail extraction, tone detection, general content generation |
+| `llama.js` | All calls to the local model: email/SMS reply generation, natural-language command interpretation, contact-detail and freeform-subcontractor-detail extraction, subcontractor application acknowledgment replies, tone detection, general content generation |
 | `email-rules.js` | The email rule engine, plus the promotional-content detector used by both rule matching and `spam all promotional` |
 | `sms-rules.js` | The Google Voice rule engine |
-| `contacts.js` | The contact directory: lookup, create, update, history, per-contact instructions |
+| `contacts.js` | The contact directory: lookup, create, update, history, per-contact instructions, subcontractor trade/license/insurance fields and lookup-by-trade |
 | `contacts-sync.js` | One-way merge of Android's real contact list into `contacts.json` |
+| `subcontractor-form.js` | Detects and deterministically parses "Subcontractor Application" lead-form emails into trade/license/insurance/crew/references |
+| `trades.js` | Canonical trade taxonomy and synonym normalization (e.g. "electrician" → `electrical`), shared by `contacts.js` and `subcontractor-form.js` |
 | `queue.js` | The review queue: add, fetch, edit, remove, format for display |
 | `tone.js` | Wraps `llama.js`'s tone detection with a fallback and tone-to-instruction mapping used in SMS reply prompts |
 | `logger.js` | Structured JSON file logging plus console mirroring |
