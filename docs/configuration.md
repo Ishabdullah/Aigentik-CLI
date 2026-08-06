@@ -14,8 +14,16 @@ Every field in `config.json`, in full:
     "admin_email": "you@gmail.com"               // your personal email — treated exactly like admin_number for commands
   },
   "gmail": {
-    "email": "aigentik@gmail.com",               // the account Aigentik logs into
+    "email": "aigentik@gmail.com",               // the account Aigentik logs into (IMAP/SMTP auth)
     "app_password": "xxxx xxxx xxxx xxxx",       // 16-char Gmail App Password, NOT your login password
+    "send_as": null,                             // optional: a verified Gmail "Send mail as" alias
+                                                  // (Settings > Accounts > Send mail as) to put in the
+                                                  // From header of customer-facing mail instead of
+                                                  // `email` — e.g. "contact@yourbusiness.com" forwarding
+                                                  // into this inbox. Leave null/omit to send as `email`.
+                                                  // Google Voice SMS replies and owner notifications
+                                                  // always use `email` regardless, since GV routing
+                                                  // depends on the authenticated account, not an alias.
     "imap_host": "imap.gmail.com",
     "imap_port": 993,
     "smtp_host": "smtp.gmail.com",

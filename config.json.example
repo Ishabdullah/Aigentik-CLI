@@ -9,6 +9,12 @@
   "gmail": {
     "email": "your@gmail.com",
     "app_password": "xxxx xxxx xxxx xxxx",   // Gmail App Password (16 chars)
+    "send_as": null,                         // Optional. A verified Gmail "Send mail as" alias
+                                              // (Settings > Accounts > Send mail as) to use as the
+                                              // From address on customer-facing mail instead of
+                                              // `email` above — e.g. a business address like
+                                              // contact@yourbusiness.com that forwards into this
+                                              // inbox. Leave null to send as `email` directly.
     "imap_host": "imap.gmail.com",
     "imap_port": 993,
     "smtp_host": "smtp.gmail.com",

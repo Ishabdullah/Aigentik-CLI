@@ -210,10 +210,11 @@ async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, s
 
 // Stage 1 of a fresh request: reply with one sentence naturally
 // acknowledging what they actually said, followed by a single combined
-// template asking for everything Aigentik needs (name, address, phone,
-// call-vs-in-person, best available time, and any specific concerns) —
-// rather than asking one question per turn.
-async function sendIntakeForm({ negotiation, text, reply }) {
+// template asking for everything Aigentik still needs. Their opening
+// message (or an existing contact record) may already contain some of
+// name/address/phone — those fields are extracted/applied up front and
+// dropped from the ask instead of being requested again.
+async function sendIntakeForm({ negotiation, text, contact, reply }) {
   let acknowledgment = '';
   try {
     acknowledgment = await llama.generateAcknowledgment(text, config.aigentik_name, config.business_name, config.business_description);
@@ -221,14 +222,29 @@ async function sendIntakeForm({ negotiation, text, reply }) {
     log.error('index', 'Failed to generate acknowledgment', { error: e.message });
   }
 
-  const form = [
-    'To get this scheduled, could you send over:',
-    '• Your full name',
-    '• Your address',
-    '• A phone number',
+  let extracted = {};
+  try {
+    extracted = await llama.extractContactDetails(text, ['name', 'email', 'phone', 'address']);
+  } catch (e) {
+    log.error('index', 'Failed to extract contact details from initial message', { error: e.message });
+  }
+  if (contact?.id) contacts.applyExtractedDetails(contact.id, extracted);
+  const freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
+  const missing = contacts.getMissingFields(freshContact, ['name', 'address', 'phone']);
+
+  const asks = [];
+  if (missing.includes('name')) asks.push('• Your full name');
+  if (missing.includes('address')) asks.push('• Your address');
+  if (missing.includes('phone')) asks.push('• A phone number');
+  asks.push(
     "• Whether you'd prefer a phone call or an in-person visit",
     '• Your best available date/time (or best time to call, if a call works better)',
-    "• Any specific issues or concerns you'd like addressed",
+    "• Any specific issues or concerns you'd like addressed"
+  );
+
+  const form = [
+    'To get this scheduled, could you send over:',
+    ...asks,
     '',
     "Once I have that, I'll check the calendar and get back to you with a confirmed time."
   ].join('\n');
@@ -386,7 +402,7 @@ async function negotiateTime({ negotiation, text, adminEmail, senderLabel, reply
 //   3. Once a time's been offered, pure back-and-forth on picking one.
 async function advanceScheduling({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel }) {
   if (!negotiation.form_sent) {
-    return await sendIntakeForm({ negotiation, text, reply });
+    return await sendIntakeForm({ negotiation, text, contact, reply });
   }
   if (negotiation.offered_slots.length === 0) {
     return await processIntakeReply({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel });

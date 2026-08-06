@@ -75,6 +75,21 @@ class EmailProvider {
   }
 
   /**
+   * The address that customer-facing mail (replies, invites) appears to come
+   * from. Defaults to the authenticated Gmail account, but if that account
+   * has a verified "Send mail as" alias configured in Gmail (Settings →
+   * Accounts → Send mail as), set `gmail.send_as` in config.json to that
+   * alias and outgoing mail carries it instead — e.g. a business address
+   * like contact@yourbusiness.com that forwards into the Gmail inbox
+   * Aigentik actually monitors. IMAP/SMTP auth is unaffected; this only
+   * changes the From header, and Gmail rejects it silently (falling back to
+   * the real account) if the alias isn't verified first.
+   */
+  senderAddress() {
+    return this.config.gmail.send_as || this.config.gmail.email;
+  }
+
+  /**
    * Get SMTP transporter with secure defaults
    */
   getTransporter() {
@@ -598,7 +613,7 @@ class EmailProvider {
 
     try {
       const info = await transporter.sendMail({
-        from: `${fromName} <${this.config.gmail.email}>`,
+        from: `${fromName} <${this.senderAddress()}>`,
         to: toEmail,
         subject,
         text: body,
@@ -754,7 +769,7 @@ class EmailProvider {
    */
   buildIcs(appointment, method) {
     const toIcsDate = (iso) => new Date(iso).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-    const organizerEmail = this.config.gmail.email;
+    const organizerEmail = this.senderAddress();
     const attendeeEmail = appointment.attendee_email || organizerEmail;
     const status = method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED';
 
@@ -788,7 +803,7 @@ class EmailProvider {
     const fromName = this.config.aigentik_name || 'Aigentik';
     try {
       await transporter.sendMail({
-        from: `${fromName} <${this.config.gmail.email}>`,
+        from: `${fromName} <${this.senderAddress()}>`,
         to: toEmail,
         subject: appointment.title,
         text: bodyText || `You're booked: ${appointment.title} at ${new Date(appointment.start).toLocaleString()}.`,
@@ -815,7 +830,7 @@ class EmailProvider {
     const fromName = this.config.aigentik_name || 'Aigentik';
     try {
       await transporter.sendMail({
-        from: `${fromName} <${this.config.gmail.email}>`,
+        from: `${fromName} <${this.senderAddress()}>`,
         to: toEmail,
         subject: `Cancelled: ${appointment.title}`,
         text: bodyText || `This appointment has been cancelled: ${appointment.title} (was ${new Date(appointment.start).toLocaleString()}).`,
