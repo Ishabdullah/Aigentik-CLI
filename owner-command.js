@@ -12,6 +12,7 @@ import * as calendarModule from './calendar.js';
 import fs from 'fs';
 import path from 'path';
 import * as contactsSync from './contacts-sync.js';
+import { normalizeTrade } from './trades.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -613,6 +614,49 @@ Return ONLY JSON.`;
         reply(`✅ Added ${c.name} to contacts.`);
       }
       log.action('owner-command', `add_contact: ${targetName}`);
+      break;
+    }
+
+    case 'add_subcontractor': {
+      const targetName = cmd.target;
+      if (!targetName) { reply("What's the subcontractor's name or business name?"); break; }
+
+      let extracted = {};
+      try {
+        extracted = await llama.extractSubcontractorDetails(cmd.content || originalText);
+      } catch (e) {
+        log.error('owner-command', 'Failed to extract subcontractor details', { error: e.message });
+      }
+
+      let contact = contacts.findContact(targetName);
+      if (!contact) {
+        contact = contacts.createContact({
+          name: targetName,
+          phones: extracted.phone,
+          emails: extracted.email,
+          type: 'subcontractor',
+          source: 'owner'
+        });
+      }
+
+      contacts.applySubcontractorDetails(contact.id, {
+        business_name: extracted.business_name || (contact.business_name ? null : targetName),
+        trade: normalizeTrade(extracted.trade),
+        trade_raw: extracted.trade,
+        phone: extracted.phone,
+        email: extracted.email,
+        licensed: extracted.licensed,
+        license_number: extracted.license_number,
+        gl_insurance: extracted.gl_insurance,
+        wc_insurance: extracted.wc_insurance,
+        has_tools: extracted.has_tools,
+        crew_size: extracted.crew_size,
+        weekly_capacity: extracted.weekly_capacity
+      });
+
+      const trade = normalizeTrade(extracted.trade);
+      reply(`✅ Added ${contact.name || targetName} as a subcontractor${trade ? ` (${extracted.trade})` : ''}.`);
+      log.action('owner-command', `add_subcontractor: ${targetName}`);
       break;
     }
 

@@ -41,6 +41,7 @@ Everything else is sent to the local model with a short JSON schema to fill in, 
 | List rules | `list rules` / `list sms rules` | Same as the direct-phrase versions |
 | Find a contact | `find Sarah` | Looks up and returns saved info for a contact |
 | List subcontractors by trade | `list my plumbers` / `who are my painters` | Returns every `subcontractor`-type contact whose trade matches (recognizes trade synonyms — "electrician" finds `electrical`), or says there are none for that trade |
+| Add a subcontractor | `add subcontractor Bob's Plumbing, plumber, phone 5551234567, licensed, has GL and WC insurance, crew of 3` | Creates (or upgrades an existing) contact as `type: "subcontractor"`, extracting trade/phone/email/license/insurance/crew/capacity from the description |
 | Per-contact instructions | `always reply to Mom` / `never reply to spam caller` / `for my boss, always mention I'm in meetings until 3` | Sets that contact's reply behavior (`always` / `never` / `auto`) and optional standing instructions |
 | Add a contact | `add contact Sarah phone 5551234567` | Creates the contact if it doesn't exist yet, or adds the phone/email to an existing one |
 | Update a contact | `save email john@x.com to Mike` / `change Mike's name to Michael` | Adds a phone/email/relationship/notes, or overwrites the name, on an existing contact |
