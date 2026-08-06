@@ -890,6 +890,19 @@ Return ONLY JSON.`;
       reply(`📒 Contacts:\n${contacts.listContacts()}`);
       break;
 
+    case 'list_subcontractors_by_trade': {
+      const tradeQuery = cmd.target;
+      if (!tradeQuery) { reply('Which trade?'); break; }
+      const matches = contacts.findSubcontractorsByTrade(tradeQuery);
+      if (matches.length === 0) {
+        reply(`I don't have any subcontractors on file for "${tradeQuery}".`);
+        break;
+      }
+      const list = matches.map(c => contacts.formatContact(c)).join('\n');
+      reply(`🛠️ ${matches.length} subcontractor(s) for "${tradeQuery}":\n${list}`);
+      break;
+    }
+
     case 'generate_content': {
       const content = await llama.generateContent(cmd.content, cmd.target || 'message', '');
       reply(`Here's what I generated:\n\n${content}`);

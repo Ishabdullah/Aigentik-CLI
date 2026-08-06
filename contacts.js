@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import config from './config.json' with { type: 'json' };
 import log from './logger.js';
+import { normalizeTrade } from './trades.js';
 
 const CONTACTS_FILE = path.join(config.paths.data_dir, 'contacts.json');
 
@@ -104,6 +105,70 @@ function applyExtractedDetails(id, extracted) {
   return updateContact(id, updates);
 }
 
+// Apply a parsed subcontractor application (subcontractor-form.js) onto a
+// contact — always forces type to 'subcontractor' (a submitted application
+// is an unambiguous signal, unlike the incremental scheduling-intake
+// extraction applyExtractedDetails does) and overwrites trade/license/
+// insurance/crew fields with the latest submission rather than merging,
+// since a resubmission should reflect current standing, not accumulate.
+function applySubcontractorDetails(id, parsed) {
+  if (!parsed) return null;
+  const updates = { type: 'subcontractor' };
+  if (parsed.business_name) updates.business_name = parsed.business_name;
+  if (parsed.trade) updates.trade = parsed.trade;
+  if (parsed.trade_raw) updates.trade_raw = parsed.trade_raw;
+  if (parsed.principal_name) updates.name = parsed.principal_name;
+  if (parsed.phone) updates.phones = parsed.phone;
+  if (parsed.email) updates.emails = parsed.email;
+  if (parsed.licensed !== null && parsed.licensed !== undefined) updates.licensed = parsed.licensed;
+  if (parsed.license_number) updates.license_number = parsed.license_number;
+  if (parsed.gl_insurance !== null && parsed.gl_insurance !== undefined) updates.gl_insurance = parsed.gl_insurance;
+  if (parsed.wc_insurance !== null && parsed.wc_insurance !== undefined) updates.wc_insurance = parsed.wc_insurance;
+  if (parsed.has_tools !== null && parsed.has_tools !== undefined) updates.has_tools = parsed.has_tools;
+  if (parsed.crew_size != null) updates.crew_size = parsed.crew_size;
+  if (parsed.weekly_capacity) updates.weekly_capacity = parsed.weekly_capacity;
+  if (parsed.references?.length) updates.references = parsed.references;
+  return updateContact(id, updates);
+}
+
+// Subcontractors on file whose trade matches a freeform query (e.g. "list
+// my plumbers" -> tradeQuery "plumbers") — normalizes the query the same
+// way trade_raw was normalized on intake so "plumber"/"plumbing"/"Plumbing
+// Contractor" all resolve to the same slug; falls back to a raw substring
+// match against trade_raw for a trade that didn't map to a known slug.
+function findSubcontractorsByTrade(tradeQuery) {
+  if (!tradeQuery) return [];
+  const norm = normalizeTrade(tradeQuery);
+  const q = tradeQuery.toLowerCase().trim();
+  return loadContacts().filter(c => {
+    if (c.type !== 'subcontractor') return false;
+    if (norm && c.trade === norm) return true;
+    if (c.trade_raw && c.trade_raw.toLowerCase().includes(q)) return true;
+    return false;
+  });
+}
+
+// Trade/license/insurance/crew block appended to a subcontractor's contact
+// info — shared by formatContactInfo (owner "find [name]") and anywhere
+// else (e.g. index.js's appointment detail block) that needs to hand the
+// admin a subcontractor's standing alongside their booking/contact info.
+function formatSubcontractorDetails(contact) {
+  if (!contact || contact.type !== 'subcontractor') return '';
+  const lines = [];
+  if (contact.business_name) lines.push('🏢 Business: ' + contact.business_name);
+  if (contact.trade_raw || contact.trade) lines.push('🛠️ Trade: ' + (contact.trade_raw || contact.trade));
+  if (contact.licensed !== null && contact.licensed !== undefined) {
+    lines.push('📄 Licensed: ' + (contact.licensed ? 'Yes' + (contact.license_number ? ' (#' + contact.license_number + ')' : '') : 'No'));
+  }
+  if (contact.gl_insurance !== null && contact.gl_insurance !== undefined) lines.push('🛡️ GL Insurance: ' + (contact.gl_insurance ? 'Yes' : 'No'));
+  if (contact.wc_insurance !== null && contact.wc_insurance !== undefined) lines.push('🛡️ WC Insurance: ' + (contact.wc_insurance ? 'Yes' : 'No'));
+  if (contact.has_tools !== null && contact.has_tools !== undefined) lines.push('🧰 Own tools/crew: ' + (contact.has_tools ? 'Yes' : 'No'));
+  if (contact.crew_size != null) lines.push('👷 Crew size: ' + contact.crew_size);
+  if (contact.weekly_capacity) lines.push('🗓️ Capacity: ' + contact.weekly_capacity);
+  if (contact.references?.length) lines.push('📇 References: ' + contact.references.map(r => r.raw).join('; '));
+  return lines.join('\n');
+}
+
 // Find contact by relationship label (e.g. "boss", "wife")
 function findByRelationship(relationship) {
   const contacts = loadContacts();
@@ -128,6 +193,20 @@ function createContact({ name, phones, emails, relationship, type, notes, source
     notes: notes || null,
     instructions: null,
     reply_behavior: 'auto',
+    // Subcontractor-specific fields — stay null/empty for every other
+    // contact type, populated from a parsed application (see
+    // applySubcontractorDetails / subcontractor-form.js).
+    business_name: null,
+    trade: null,
+    trade_raw: null,
+    licensed: null,
+    license_number: null,
+    gl_insurance: null,
+    wc_insurance: null,
+    has_tools: null,
+    crew_size: null,
+    weekly_capacity: null,
+    references: [],
     source: source || 'auto',
     first_seen: new Date().toISOString(),
     last_contact: new Date().toISOString(),
@@ -179,9 +258,20 @@ function updateContact(id, updates) {
 
   if (updates.name && !contact.name) contact.name = updates.name;
   if (updates.relationship) contact.relationship = updates.relationship;
-  if (updates.type && contact.type === 'unknown') contact.type = updates.type;
+  if (updates.type) contact.type = updates.type;
   if (updates.notes) contact.notes = updates.notes;
   if (updates.address) contact.address = updates.address;
+  if (updates.business_name) contact.business_name = updates.business_name;
+  if (updates.trade) contact.trade = updates.trade;
+  if (updates.trade_raw) contact.trade_raw = updates.trade_raw;
+  if (updates.licensed !== undefined) contact.licensed = updates.licensed;
+  if (updates.license_number) contact.license_number = updates.license_number;
+  if (updates.gl_insurance !== undefined) contact.gl_insurance = updates.gl_insurance;
+  if (updates.wc_insurance !== undefined) contact.wc_insurance = updates.wc_insurance;
+  if (updates.has_tools !== undefined) contact.has_tools = updates.has_tools;
+  if (updates.crew_size != null) contact.crew_size = updates.crew_size;
+  if (updates.weekly_capacity) contact.weekly_capacity = updates.weekly_capacity;
+  if (updates.references) contact.references = updates.references;
 
   contact.last_contact = new Date().toISOString();
   contact.contact_count = (contact.contact_count || 0) + 1;
@@ -306,7 +396,11 @@ function formatContact(contact) {
   if (contact.relationship) parts.push(`(${contact.relationship})`);
   if (contact.phones?.length) parts.push(`📱 ${contact.phones[0]}`);
   if (contact.emails?.length) parts.push(`✉️ ${contact.emails[0]}`);
-  if (contact.type !== 'unknown') parts.push(`[${contact.type}]`);
+  if (contact.type !== 'unknown') {
+    const tradeSuffix = contact.type === 'subcontractor' && (contact.trade_raw || contact.trade)
+      ? `: ${contact.trade_raw || contact.trade}` : '';
+    parts.push(`[${contact.type}${tradeSuffix}]`);
+  }
   return parts.join(' ') || contact.id;
 }
 
@@ -382,6 +476,8 @@ function formatContactInfo(contact) {
   if (contact.emails?.length) lines.push('✉️ ' + contact.emails.join(', '));
   if (contact.address) lines.push('🏠 ' + contact.address);
   if (contact.notes) lines.push('📝 ' + contact.notes);
+  const subDetails = formatSubcontractorDetails(contact);
+  if (subDetails) lines.push(subDetails);
   return lines.join('\n');
 }
 
@@ -390,6 +486,9 @@ export {
   getContactById,
   getMissingFields,
   applyExtractedDetails,
+  applySubcontractorDetails,
+  findSubcontractorsByTrade,
+  formatSubcontractorDetails,
   findByRelationship,
   findAllByName,
   createContact,

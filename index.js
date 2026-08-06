@@ -24,6 +24,7 @@ import * as tone from './tone.js';
 import * as smsRules from './sms-rules.js';
 import * as emailRules from './email-rules.js';
 import * as calendarModule from './calendar.js';
+import * as subcontractorForm from './subcontractor-form.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -185,7 +186,13 @@ function customerDetailBlock(appt, fallbackLabel, attendeeEmail) {
   const phone = bookedContact?.phones?.[0] || 'not on file';
   const email = attendeeEmail || bookedContact?.emails?.[0] || appt.attendee_email || 'not on file';
   const address = bookedContact?.address || 'not on file';
-  return `👤 Name: ${name}\n📞 Phone: ${phone}\n📧 Email: ${email}\n🏠 Address: ${address}`;
+  let block = `👤 Name: ${name}\n📞 Phone: ${phone}\n📧 Email: ${email}\n🏠 Address: ${address}`;
+  // If this appointment is with a subcontractor (e.g. an onboarding call),
+  // the admin needs their license/insurance/crew standing right alongside
+  // the booking, not just the name.
+  const subDetails = contacts.formatSubcontractorDetails(bookedContact);
+  if (subDetails) block += '\n' + subDetails;
+  return block;
 }
 
 // Confirm a negotiation into a real booking, send invites, and reply with
@@ -588,6 +595,50 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
 }
 
 // Handle Google Voice forwarded text messages
+// A subcontractor application arrived as a structured lead-form
+// submission — parse it deterministically, save the applicant as a
+// 'subcontractor' contact (distinct from a regular customer contact) with
+// their trade/license/insurance/crew standing, acknowledge receipt with a
+// subcontractor-specific reply (never the customer auto-reply prompt), and
+// give the admin the full application in one notification.
+async function handleSubcontractorApplication(email) {
+  const parsed = subcontractorForm.parseApplication(email.body || '');
+  const contact = contacts.findOrCreateByEmail(email.from_email, parsed.principal_name || email.from_name);
+  contacts.applySubcontractorDetails(contact.id, parsed);
+  contacts.addHistory(email.from_email, {
+    type: 'subcontractor_application',
+    trade: parsed.trade_raw || parsed.trade,
+    business_name: parsed.business_name
+  });
+
+  log.action('index', 'Subcontractor application received from ' + email.from_email, {
+    business: parsed.business_name,
+    trade: parsed.trade_raw
+  });
+
+  try {
+    const agentName = config.aigentik_name || 'Aigentik';
+    const ownerName = config.owner_name || null;
+    const businessName = config.business_name || null;
+    const businessDescription = config.business_description || null;
+
+    const ack = await llama.generateSubcontractorAck(
+      parsed.principal_name || email.from_name,
+      parsed.business_name,
+      parsed.trade_raw || parsed.trade,
+      agentName, businessName, businessDescription
+    );
+    const signature = businessName
+      ? `\n\n---\n${agentName} | ${businessName}`
+      : `\n\n---\n${agentName}` + (ownerName ? ` | Personal Agent of ${ownerName}` : '');
+    await gmail.sendReply(email.from_email, email.subject, ack + signature);
+  } catch (e) {
+    log.error('index', 'Failed to send subcontractor application ack', { error: e.message });
+  }
+
+  await gmail.sendOwnerNotification(subcontractorForm.formatApplicationSummary(parsed));
+}
+
 async function handleGoogleVoiceText(email) {
   const voiceMsg = gmail.parseGoogleVoiceEmail(email);
 
@@ -753,6 +804,16 @@ async function handleNewEmail(email) {
   // Route Google Voice texts separately
   if (gmail.isGoogleVoiceText(email)) {
     await handleGoogleVoiceText(email);
+    return;
+  }
+
+  // Subcontractor applications get their own distinct handling — parsed
+  // deterministically (like scheduling's date math) rather than through the
+  // general auto-reply flow, saved as a 'subcontractor' contact rather than
+  // a regular customer, and acknowledged with a subcontractor-specific
+  // reply instead of the customer reply prompt.
+  if (subcontractorForm.isSubcontractorApplication(email)) {
+    await handleSubcontractorApplication(email);
     return;
   }
 
