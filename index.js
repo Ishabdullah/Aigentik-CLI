@@ -25,6 +25,7 @@ import * as smsRules from './sms-rules.js';
 import * as emailRules from './email-rules.js';
 import * as calendarModule from './calendar.js';
 import * as subcontractorForm from './subcontractor-form.js';
+import * as doNotContact from './do-not-contact.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -44,6 +45,47 @@ function stripQuotedReply(text) {
     result = result.replace(marker, '');
   }
   return result.trim();
+}
+
+// Shared do-not-contact gate for both channels — called before any auto-reply
+// or drafting happens. Two cases:
+//  1. The identifier is already on the list: silently drop (no reply, no
+//     draft) and report it to the admin so they know Aigentik is honoring
+//     the block rather than just going quiet.
+//  2. The message itself contains opt-out language ("stop texting me",
+//     "remove me from your list", etc): add them to the list right now,
+//     before any reply goes out, and report what happened.
+// Returns true if the caller should stop processing this message.
+async function checkDoNotContact({ identifier, name, text, channel }) {
+  if (!identifier) return false;
+
+  if (doNotContact.isBlocked(identifier)) {
+    log.action('index', `Blocked contact reached out again: ${identifier}`, { channel });
+    await gmail.sendOwnerNotification(
+      `🚫 Do-Not-Contact: ${name ? name + ' (' + identifier + ')' : identifier} messaged you again via ${channel}, ` +
+      `but they're on your do-not-contact list — no reply was sent.\n\nTheir message: "${(text || '').substring(0, 200)}"`
+    );
+    return true;
+  }
+
+  if (doNotContact.detectOptOutRequest(text)) {
+    const entry = doNotContact.addToDoNotContact({
+      identifier,
+      name,
+      reason: 'asked to be removed/stopped contacting',
+      source: 'auto-detected'
+    });
+    log.action('index', `Added to do-not-contact from opt-out request: ${identifier}`, { channel });
+    await gmail.sendOwnerNotification(
+      `🚫 Do-Not-Contact added: ${name ? name + ' (' + identifier + ')' : identifier} asked to be removed via ${channel}.\n` +
+      `Aigentik will never contact them again.\n\n` +
+      `Their message: "${(text || '').substring(0, 200)}"\n` +
+      (entry ? `Stored as: ${entry.value}` : '')
+    );
+    return true;
+  }
+
+  return false;
 }
 
 // On a brand-new install there is no profile.json yet (data/ is gitignored,
@@ -602,6 +644,14 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
 // subcontractor-specific reply (never the customer auto-reply prompt), and
 // give the admin the full application in one notification.
 async function handleSubcontractorApplication(email) {
+  if (doNotContact.isBlocked(email.from_email)) {
+    log.action('index', `Blocked contact sent a subcontractor application: ${email.from_email}`);
+    await gmail.sendOwnerNotification(
+      `🚫 Do-Not-Contact: ${email.from_email} submitted a subcontractor application, but they're on your do-not-contact list — no acknowledgment was sent.`
+    );
+    return;
+  }
+
   const parsed = subcontractorForm.parseApplication(email.body || '');
   const contact = contacts.findOrCreateByEmail(email.from_email, parsed.principal_name || email.from_name);
   contacts.applySubcontractorDetails(contact.id, parsed);
@@ -678,6 +728,15 @@ async function handleGoogleVoiceText(email) {
     type: 'gvoice_text_received',
     preview: voiceMsg.body.substring(0, 100)
   });
+
+  // Do-not-contact check must happen before any reply/draft is generated
+  const dncHandled = await checkDoNotContact({
+    identifier: voiceMsg.sender_phone,
+    name: voiceMsg.sender_name || contact?.name,
+    text: stripQuotedReply(voiceMsg.body) || voiceMsg.body,
+    channel: 'sms'
+  });
+  if (dncHandled) return;
 
   // Check for urgent keyword
   if (ownerName && voiceMsg.body.toLowerCase().includes(ownerName.toLowerCase())) {
@@ -841,6 +900,15 @@ async function handleNewEmail(email) {
     subject: email.subject,
     preview: email.body?.substring(0, 100)
   });
+
+  // Do-not-contact check must happen before any reply/draft is generated
+  const dncHandled = await checkDoNotContact({
+    identifier: email.from_email,
+    name: email.from_name || contact?.name,
+    text: stripQuotedReply(email.body) || email.body,
+    channel: 'email'
+  });
+  if (dncHandled) return;
 
   const { action } = emailRules.checkRules({
     from: email.from_email,

@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import * as contactsSync from './contacts-sync.js';
 import { normalizeTrade } from './trades.js';
+import * as doNotContact from './do-not-contact.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -62,6 +63,48 @@ function handleRename(newName) {
   } catch (e) {
     reply('Sorry, I had trouble saving the new name. Try again.');
   }
+}
+
+// A do-not-contact target can be a raw email/phone, or a saved contact's
+// name — resolve a name down to the identifier(s) Aigentik would actually
+// use to reach them, since the do-not-contact list is keyed on identifiers,
+// not names.
+function resolveIdentifiers(target) {
+  if (!target) return [];
+  if (target.includes('@') || /\d{7,}/.test(target)) return [target];
+  const contact = contacts.findContact(target) || contacts.findByRelationship(target);
+  if (!contact) return [];
+  return [...(contact.emails || []), ...(contact.phones || [])];
+}
+
+function handleBlockContact(target, reason) {
+  if (!target) { reply('Who should I block? Give me a name, email, or phone number.'); return; }
+  const identifiers = resolveIdentifiers(target);
+  if (identifiers.length === 0) {
+    reply(`I couldn't find an email or phone for "${target}". Try the exact email or phone number.`);
+    return;
+  }
+  identifiers.forEach(id => doNotContact.addToDoNotContact({
+    identifier: id,
+    name: target.includes('@') || /\d{7,}/.test(target) ? null : target,
+    reason: reason || 'blocked by owner',
+    source: 'owner'
+  }));
+  reply(`🚫 Blocked ${target} — ${identifiers.join(', ')}. I will never contact them again.`);
+  log.action('owner-command', `Owner blocked: ${target}`, { identifiers });
+}
+
+function handleUnblockContact(target) {
+  if (!target) { reply('Who should I unblock?'); return; }
+  const identifiers = resolveIdentifiers(target);
+  const candidates = identifiers.length ? identifiers : [target];
+  const removed = candidates.filter(id => doNotContact.removeFromDoNotContact(id));
+  if (removed.length === 0) {
+    reply(`"${target}" isn't on the do-not-contact list.`);
+    return;
+  }
+  reply(`✅ Unblocked ${target}.`);
+  log.action('owner-command', `Owner unblocked: ${target}`, { identifiers: removed });
 }
 
 // Marks setup complete once both identity fields Aigentik asks for on
@@ -213,6 +256,24 @@ async function handleOwnerCommand(sms) {
     return;
   }
 
+  // Show the do-not-contact list
+  if (lower === 'blocked' || lower === 'do not contact list' || lower === 'dnc list' || lower === 'dnc') {
+    reply(doNotContact.listDoNotContact());
+    return;
+  }
+
+  // Block shorthand — "block [name/email/phone]"
+  if (lower.startsWith('block ')) {
+    handleBlockContact(text.substring(6).trim());
+    return;
+  }
+
+  // Unblock shorthand — "unblock [name/email/phone]"
+  if (lower.startsWith('unblock ')) {
+    handleUnblockContact(text.substring(8).trim());
+    return;
+  }
+
   // Direct email shorthand — "email [name] about/re [topic]"
   if (lower.startsWith('email ') && (lower.includes(' about ') || lower.includes(' re '))) {
     const words = text.split(' ');
@@ -225,6 +286,11 @@ async function handleOwnerCommand(sms) {
 
     if (!exactMatch || !exactMatch.emails?.length) {
       reply('I need an email address for "' + target + '". Say "add contact ' + target + ' email [address]"');
+      return;
+    }
+
+    if (doNotContact.isBlocked(exactMatch.emails[0])) {
+      reply('🚫 ' + (exactMatch.name || target) + ' (' + exactMatch.emails[0] + ') is on your do-not-contact list — I won\'t send this.');
       return;
     }
 
@@ -341,6 +407,11 @@ async function executeInterpretedCommand(cmd, originalText, name) {
       if (!id) { reply('Which item? Say "reply [number]"'); break; }
       const item = queue.getItem(id);
       if (!item) { reply(`Item #${id} not found.`); break; }
+
+      if (doNotContact.isBlocked(item.sender)) {
+        reply(`🚫 ${item.sender_name || item.sender} is on your do-not-contact list — I won't send this. Say "skip ${id}" to dismiss it, or "unblock ${item.sender_name || item.sender}" if that's wrong.`);
+        break;
+      }
 
       if (item.type === 'email' && gmail) {
         await gmail.sendReply(item.sender, item.subject, item.draft_reply);
@@ -484,6 +555,11 @@ Return ONLY JSON.`;
 
       if (!toEmail) {
         reply(`I need an email address for "${cmd.target}". Do you have one saved for them?\nIf so, say: "add contact [name] email [address]"`);
+        break;
+      }
+
+      if (doNotContact.isBlocked(toEmail)) {
+        reply(`🚫 ${toName} (${toEmail}) is on your do-not-contact list — I won't send this. Say "unblock ${toName}" if that's wrong.`);
         break;
       }
 
@@ -946,6 +1022,20 @@ Return ONLY JSON.`;
       reply(`🛠️ ${matches.length} subcontractor(s) for "${tradeQuery}":\n${list}`);
       break;
     }
+
+    case 'block_contact': {
+      handleBlockContact(cmd.target, cmd.content);
+      break;
+    }
+
+    case 'unblock_contact': {
+      handleUnblockContact(cmd.target);
+      break;
+    }
+
+    case 'list_do_not_contact':
+      reply(doNotContact.listDoNotContact());
+      break;
 
     case 'generate_content': {
       const content = await llama.generateContent(cmd.content, cmd.target || 'message', '');

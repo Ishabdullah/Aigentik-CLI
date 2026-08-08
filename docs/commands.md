@@ -9,6 +9,7 @@ Say/text/email any of these to the admin number or `admin_email`. A handful of e
 - [Direct phrases (no AI needed)](#direct-phrases-no-ai-needed)
 - [Natural-language commands](#natural-language-commands)
 - [Confirmation-gated (destructive) commands](#confirmation-gated-destructive-commands)
+- [Do-not-contact list](#do-not-contact-list)
 - [What Aigentik can't do](#what-aigentik-cant-do)
 - [The review queue](#the-review-queue)
 
@@ -23,6 +24,9 @@ Say/text/email any of these to the admin number or `admin_email`. A handful of e
 | `contacts` / `list contacts` | List the contact directory |
 | `sync contacts` / `refresh contacts` / `sync` | Re-sync from your phone's Android contacts |
 | `email [name] about [topic]` / `email [name] re [topic]` | Draft and send a fresh email to a saved contact |
+| `block [name/email/phone]` | Adds them to the do-not-contact list — see [Do-not-contact list](#do-not-contact-list) |
+| `unblock [name/email/phone]` | Removes them from the do-not-contact list |
+| `blocked` / `do not contact list` / `dnc list` | Show everyone on the do-not-contact list |
 | `rename [name]` | Change what Aigentik calls itself |
 | `business info` / `company info` / `who do you work for` | Show the currently set business name/description |
 
@@ -73,6 +77,19 @@ These never run immediately — Aigentik describes what it's about to do and wai
 | `cancel [name]'s appointment` | Cancels the appointment and emails a cancellation notice (matching `.ics` `CANCEL`) to both the contact and you |
 
 Only one confirmation can be pending at a time; if you say anything other than yes/no while one is outstanding, the pending action is discarded and your new message is processed as a fresh command.
+
+## Do-not-contact list
+
+`do-not-contact.js` maintains a permanent block list at `data/do-not-contact.json` — like everything under `data/`, it's gitignored and never leaves this install. Anyone on it is never auto-replied to, queued, or messaged again on either channel (email or Google Voice), and no rule or per-contact `always` setting overrides it.
+
+Entries get added two ways:
+
+- **You block them explicitly** — `block hello@contractorplus.app`, `block Sarah` (resolves to her saved email/phone), or naturally, `never contact Sarah again`.
+- **They ask to be removed** — Aigentik checks every inbound email/text body (quoted reply chains stripped first) for first-person opt-out phrasing ("stop texting me", "remove me from your list", "unsubscribe me", etc., matched deterministically, not by the model) *before* drafting any reply. Deliberately narrow and first-person-only — bare "unsubscribe"/"opt out" are excluded since those show up constantly in marketing-footer boilerplate (see `email-rules.js`'s promotional detector) and a false positive here is a permanent, silent block. A real match blocks them on the spot — no reply is ever sent to the message that triggered it.
+
+Either way, you get an admin notification reporting exactly what happened (who, which channel, their message, why they were added). If a blocked contact reaches out again later, you get a short notification each time noting Aigentik stayed silent — so the block isn't invisible, it's just never acted on. The block is also checked before `reply [#]` sends a queued draft, so a block that lands after a reply was already drafted still stops it.
+
+`unblock [name/email/phone]` reverses it. `blocked` / `do not contact list` shows the current list.
 
 ## What Aigentik can't do
 
