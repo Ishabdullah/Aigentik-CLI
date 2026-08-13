@@ -2,6 +2,10 @@
 
 **Your local AI communications assistant. Runs privately on your device.**
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Node.js >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![Platform: Termux/Android/Linux](https://img.shields.io/badge/platform-Termux%20%7C%20Android%20%7C%20Linux-lightgrey.svg)](#)
+
 ---
 
 ## Introduction
