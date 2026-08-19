@@ -70,17 +70,17 @@ async function disconnect() {
 /**
  * Send email reply
  */
-async function sendReply(toEmail, originalSubject, body) {
+async function sendReply(toEmail, originalSubject, body, html) {
   const provider = getProvider();
-  return provider.sendReply(toEmail, originalSubject, body);
+  return provider.sendReply(toEmail, originalSubject, body, html);
 }
 
 /**
  * Send new email
  */
-async function sendEmail(toEmail, subject, body) {
+async function sendEmail(toEmail, subject, body, html) {
   const provider = getProvider();
-  return provider.sendEmail(toEmail, subject, body);
+  return provider.sendEmail(toEmail, subject, body, html);
 }
 
 /**

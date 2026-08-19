@@ -349,11 +349,12 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
         const businessName = config.business_name || null;
         const businessDescription = config.business_description || null;
         if (channel === 'email') {
-          answer = await llama.generateEmailReply(
+          const generated = await llama.generateEmailReply(
             senderLabel, target, subject, text,
             freshContact?.relationship, freshContact?.instructions,
             ownerName, agentName, businessName, businessDescription
           );
+          answer = generated.text;
         } else {
           const detectedTone = await tone.detectTone(text);
           answer = await llama.generateSmsReply(
@@ -678,10 +679,13 @@ async function handleSubcontractorApplication(email) {
       parsed.trade_raw || parsed.trade,
       agentName, businessName, businessDescription
     );
-    const signature = businessName
-      ? `\n\n---\n${agentName} | ${businessName}`
-      : `\n\n---\n${agentName}` + (ownerName ? ` | Personal Agent of ${ownerName}` : '');
-    await gmail.sendReply(email.from_email, email.subject, ack + signature);
+    const signature = llama.buildEmailSignature(agentName, businessName, ownerName, null);
+    await gmail.sendReply(
+      email.from_email,
+      email.subject,
+      ack + signature.text,
+      llama.textToHtml(ack) + signature.html
+    );
   } catch (e) {
     log.error('index', 'Failed to send subcontractor application ack', { error: e.message });
   }
@@ -951,12 +955,12 @@ async function handleNewEmail(email) {
     );
 
     if (action === 'auto-reply') {
-      await gmail.sendReply(email.from_email, email.subject, reply);
+      await gmail.sendReply(email.from_email, email.subject, reply.text, reply.html);
       contacts.addHistory(email.from_email, { type: 'email_auto_replied' });
       await gmail.sendOwnerNotification(
         '✉️ Auto-replied to ' + (email.from_name || email.from_email) + ':\n' +
         'Subject: ' + email.subject?.substring(0, 50) + '\n' +
-        'Sent: "' + reply.substring(0, 80) + '"'
+        'Sent: "' + reply.text.substring(0, 80) + '"'
       );
     } else {
       const item = queue.addToQueue({
@@ -965,7 +969,7 @@ async function handleNewEmail(email) {
         senderName: email.from_name,
         subject: email.subject,
         body: email.body?.substring(0, 300),
-        draftReply: reply,
+        draftReply: reply.text,
         contactId: contact?.id,
         uid: email.uid
       });
@@ -973,7 +977,7 @@ async function handleNewEmail(email) {
         '✉️ Email #' + item.display_id + ' from ' +
         (email.from_name || email.from_email) + ':\n' +
         'Subject: ' + email.subject?.substring(0, 50) + '\n' +
-        'Draft: "' + reply.substring(0, 80) + '"\n\n' +
+        'Draft: "' + reply.text.substring(0, 80) + '"\n\n' +
         'Reply "reply ' + item.display_id + '" to send'
       );
     }

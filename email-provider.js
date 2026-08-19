@@ -8,6 +8,7 @@ import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
 import config from './config.json' with { type: 'json' };
 import log from './logger.js';
+import { SIGNATURE_ICON_PATH, SIGNATURE_ICON_CID } from './llama.js';
 
 class EmailProvider {
   constructor(options = {}) {
@@ -599,15 +600,17 @@ class EmailProvider {
   /**
    * Send email reply
    */
-  async sendReply(toEmail, originalSubject, body) {
+  async sendReply(toEmail, originalSubject, body, html) {
     const subject = originalSubject.startsWith('Re:') ? originalSubject : `Re: ${originalSubject}`;
-    return this.sendEmail(toEmail, subject, body, true);
+    return this.sendEmail(toEmail, subject, body, html, true);
   }
 
   /**
-   * Send new email
+   * Send new email. When `html` is given, the message is sent as HTML (with
+   * `body` as the plain-text fallback) and the RESTORICON icon thumbnail is
+   * embedded as a cid attachment so the AI's signature renders inline.
    */
-  async sendEmail(toEmail, subject, body, isReply = false) {
+  async sendEmail(toEmail, subject, body, html, isReply = false) {
     const transporter = this.getTransporter();
     const fromName = this.config.aigentik_name || 'Aigentik';
 
@@ -617,6 +620,14 @@ class EmailProvider {
         to: toEmail,
         subject,
         text: body,
+        ...(html ? {
+          html,
+          attachments: [{
+            filename: 'restoricon-icon-thumb.png',
+            path: SIGNATURE_ICON_PATH,
+            cid: SIGNATURE_ICON_CID
+          }]
+        } : {}),
         // Security headers
         headers: {
           'X-Auto-Response-Suppress': 'OOF, AutoReply',

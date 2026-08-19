@@ -1,4 +1,6 @@
 // llama.js — Aigentik AI communication layer
+import path from 'path';
+import { fileURLToPath } from 'url';
 import config from './config.json' with { type: 'json' };
 import log from './logger.js';
 
@@ -6,6 +8,50 @@ const LLAMA_URL = `${config.llama.host}/v1/chat/completions`;
 const MODEL = config.llama.model;
 const MAX_TOKENS = config.llama.max_tokens;
 const TEMPERATURE = config.llama.temperature;
+
+// The RESTORICON helmet-icon thumbnail embedded in every AI-sent email
+// signature (as a cid inline attachment — see email-provider.js) — this is
+// what visually distinguishes the AI's sign-off from the owner's own.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SIGNATURE_ICON_PATH = path.join(__dirname, 'assets', 'restoricon-icon-thumb.png');
+const SIGNATURE_ICON_CID = 'restoricon-icon';
+
+// Builds the AI's email sign-off in both plain-text and HTML form. Kept
+// distinct from the owner's own signature by always identifying as the
+// agent (never the owner's personal name) once a business is configured.
+function buildEmailSignature(agentName, businessName, ownerName, taglineText) {
+  const identity = businessName
+    ? `${agentName} | ${businessName}`
+    : `${agentName} | Personal Agent of ${ownerName}`;
+
+  const text = `\n\n---\n${identity}` + (taglineText ? `\n${taglineText}` : '');
+
+  const html = '<br><br>' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" style="border-top:1px solid #ccc;padding-top:10px;">' +
+    '<tr>' +
+    `<td style="padding-right:10px;vertical-align:middle;"><img src="cid:${SIGNATURE_ICON_CID}" width="36" height="36" alt="${agentName}" style="display:block;border-radius:50%;"></td>` +
+    '<td style="font-family:Arial,sans-serif;font-size:13px;color:#333;vertical-align:middle;">' +
+    `<strong>${identity}</strong>` +
+    (taglineText ? `<br><span style="color:#666;">${taglineText}</span>` : '') +
+    '</td>' +
+    '</tr>' +
+    '</table>';
+
+  return { text, html };
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Turns the model's plain-text reply into minimal HTML paragraphs so it can
+// sit above the signature's HTML table in the same message body.
+function textToHtml(text) {
+  return text.split(/\n{2,}/)
+    .map(para => '<p style="margin:0 0 12px;font-family:Arial,sans-serif;font-size:14px;color:#222;">' +
+      escapeHtml(para).replace(/\n/g, '<br>') + '</p>')
+    .join('');
+}
 
 async function chat(messages, maxTokens = MAX_TOKENS) {
   try {
@@ -43,9 +89,10 @@ async function generateEmailReply(senderName, senderEmail, subject, body, relati
   // business's secretary rather than surfacing the owner's personal name to
   // customers — the owner's name stays internal (used only in the system
   // prompt) once there's a business persona to front instead.
-  const signature = businessName
-    ? '\n\n---\n' + agent + ' | ' + businessName + '\nFor anything urgent, please reply directly and we\'ll get back to you as soon as possible.'
-    : '\n\n---\n' + agent + ' | Personal Agent of ' + owner + '\nIf you need to reach ' + owner + ' urgently, include "' + owner + '" in your subject line.';
+  const tagline = businessName
+    ? 'For anything urgent, please reply directly and we\'ll get back to you as soon as possible.'
+    : 'If you need to reach ' + owner + ' urgently, include "' + owner + '" in your subject line.';
+  const signature = buildEmailSignature(agent, businessName, owner, tagline);
 
   let instructionText = '';
   if (contactInstructions) {
@@ -70,7 +117,10 @@ async function generateEmailReply(senderName, senderEmail, subject, body, relati
 
   log.info('llama', 'Generating email reply', { from: senderEmail });
   const reply = await chat(messages);
-  return reply + signature;
+  return {
+    text: reply + signature.text,
+    html: textToHtml(reply) + signature.html
+  };
 }
 
 async function generateSmsReply(senderNumber, senderName, message, tone, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription) {
@@ -267,4 +317,4 @@ async function warmUp() {
   }
 }
 
-export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractContactDetails, extractSubcontractorDetails, generateAcknowledgment, generateSubcontractorAck, detectTone, generateContent, chat, classifySchedulingIntent };
+export { warmUp, generateEmailReply, generateSmsReply, interpretCommand, extractContactDetails, extractSubcontractorDetails, generateAcknowledgment, generateSubcontractorAck, detectTone, generateContent, chat, classifySchedulingIntent, buildEmailSignature, textToHtml, SIGNATURE_ICON_PATH, SIGNATURE_ICON_CID };
