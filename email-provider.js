@@ -316,8 +316,15 @@ class EmailProvider {
     if (!this.onNewMailCallback) return;
 
     try {
-      // Search for unseen messages since startup
-      const sinceDate = this.startupTime.toISOString().split('T')[0]; // YYYY-MM-DD
+      // Search for unseen messages since startup. Gmail's IMAP SINCE search
+      // evaluates the date in Gmail's own timezone (Pacific), not UTC, so a
+      // sinceDate taken straight from a UTC ISO string can be a calendar day
+      // ahead of what Gmail considers "today" for several hours after UTC
+      // midnight — silently excluding brand-new unseen mail from the search.
+      // Back it off by a day; the exact cutoff is still enforced below via
+      // the per-message startupTime comparison.
+      const sinceDate = new Date(this.startupTime.getTime() - 24 * 60 * 60 * 1000)
+        .toISOString().split('T')[0]; // YYYY-MM-DD
 
       // Fully drain the fetch generator before issuing any other command on this
       // connection: the underlying FETCH command doesn't complete (and release the
