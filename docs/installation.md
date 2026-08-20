@@ -17,7 +17,7 @@
 - On Android specifically: **Termux:API** installed too (grant it Contacts permission — that's the only Android permission Aigentik needs, and it's optional; see below)
 - **Node.js 18+**
 - **llama.cpp**, built with the `llama-server` binary
-- A **GGUF model** — this project is tuned around Qwen3-4B-Instruct, but any chat-completions-compatible model llama-server can serve will work
+- A **GGUF model** — this project is tuned around Qwen3.5-4B, but any chat-completions-compatible model llama-server can serve will work
 - A **Gmail account** with an **App Password** (IMAP/SMTP access, not your normal password)
 - A **Google Voice number**, with SMS forwarding to that Gmail account turned on
 
@@ -71,7 +71,7 @@ make -j$(nproc) llama-server
 Download a GGUF chat model and place it somewhere under your home directory, e.g.:
 
 ```
-~/models/qwen3-4b-instruct/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+~/models/qwen3.5-4b-instruct/Qwen3.5-4B-Q4_K_M.gguf
 ```
 
 **5. Clone and install Aigentik**

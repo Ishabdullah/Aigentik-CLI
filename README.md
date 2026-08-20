@@ -77,7 +77,7 @@ flowchart TB
             Q["queue.js"]
             OC["owner-command.js"]
         end
-        LS["llama-server\n(Qwen3-4B, local HTTP API)"]
+        LS["llama-server\n(Qwen3.5-4B, local HTTP API)"]
         DATA[("data/*.json\ncontacts, rules, queue,\ncalendar, profile, logs")]
     end
     GMAIL[("Gmail\nIMAP + SMTP")]

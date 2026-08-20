@@ -65,10 +65,10 @@ die()   { fail "$*"; exit 1; }
 AIGENTIK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLAMA_DIR="$HOME/llama.cpp"
 LLAMA_SERVER_BIN="$LLAMA_DIR/build/bin/llama-server"
-MODEL_DIR="$HOME/models/qwen3-4b-instruct"
-MODEL_FILE="Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+MODEL_DIR="$HOME/models/qwen3.5-4b-instruct"
+MODEL_FILE="Qwen3.5-4B-Q4_K_M.gguf"
 MODEL_PATH="$MODEL_DIR/$MODEL_FILE"
-MODEL_URL="https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/$MODEL_FILE"
+MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/$MODEL_FILE"
 
 IS_TERMUX=0
 if [ -n "${PREFIX:-}" ] && [[ "$PREFIX" == *"com.termux"* ]]; then
@@ -202,7 +202,7 @@ else
     warn "Automatic download failed (URL may have moved, or you're offline)."
     warn "Download a GGUF chat model manually and place it at:"
     warn "  $MODEL_PATH"
-    warn "Search Hugging Face for \"Qwen3-4B-Instruct-2507 GGUF\" (Q4_K_M is a good"
+    warn "Search Hugging Face for \"Qwen3.5-4B GGUF\" (Q4_K_M is a good"
     warn "size/quality balance), or use any other chat-completions-compatible GGUF —"
     warn "just update llama.model / llama.model_path in config.json to match."
   fi

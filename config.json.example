@@ -22,8 +22,8 @@
   },
   "llama": {
     "host": "http://127.0.0.1:8080",
-    "model": "/data/data/com.termux/files/home/models/qwen3-4b-instruct/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-    "model_path": "~/models/qwen3-4b-instruct/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+    "model": "/data/data/com.termux/files/home/models/qwen3.5-4b-instruct/Qwen3.5-4B-Q4_K_M.gguf",
+    "model_path": "~/models/qwen3.5-4b-instruct/Qwen3.5-4B-Q4_K_M.gguf",
     "llama_server_path": "/data/data/com.termux/files/home/llama.cpp/build/bin/llama-server",
     "context_size": 4096,
     "max_tokens": 512,
