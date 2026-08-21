@@ -58,7 +58,17 @@ async function chat(messages, maxTokens = MAX_TOKENS) {
     const response = await fetch(LLAMA_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, messages, max_tokens: maxTokens, temperature: TEMPERATURE }),
+      body: JSON.stringify({
+        model: MODEL,
+        messages,
+        max_tokens: maxTokens,
+        temperature: TEMPERATURE,
+        // Qwen3.5 is a reasoning model: left enabled, it streams its
+        // chain-of-thought into `reasoning_content` and leaves `content`
+        // empty until it's done thinking, which reads as an empty/failed
+        // response to every caller here that only looks at `content`.
+        chat_template_kwargs: { enable_thinking: false }
+      }),
       signal: AbortSignal.timeout(180000)
     });
     if (!response.ok) throw new Error(`llama-server returned ${response.status}`);
