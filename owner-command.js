@@ -56,6 +56,7 @@ function handleRename(newName) {
     const oldName = profile.aigentik_name;
     const name = newName.charAt(0).toUpperCase() + newName.slice(1).toLowerCase();
     profile.aigentik_name = name;
+    profile.agent_name_set = true;
     fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
     config.aigentik_name = name;
     reply(`Done! I'll now go by "${name}" instead of "${oldName}". 😊`);
@@ -338,7 +339,20 @@ async function executeInterpretedCommand(cmd, originalText, name) {
   let gmail;
   try { gmail = await import('./gmail.js'); } catch (e) {}
 
+  // agent_name can ride alongside any action (e.g. the same onboarding reply
+  // that also sets the owner's name and the business) — handled once here,
+  // separately from whatever the primary action below does.
+  if (cmd.agent_name && cmd.action !== 'set_agent_name') {
+    handleRename(cmd.agent_name);
+  }
+
   switch (cmd.action) {
+    case 'set_agent_name': {
+      const newName = cmd.target || cmd.agent_name;
+      if (!newName) { reply('What would you like me to go by?'); break; }
+      handleRename(newName);
+      break;
+    }
     case 'delete_all_emails': {
       pendingConfirmations.set('pending', {
         execute: async () => {

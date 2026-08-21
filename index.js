@@ -99,6 +99,7 @@ function loadProfile() {
       const fresh = {
         configured: false,
         aigentik_name: 'Aigentik',
+        agent_name_set: false,
         setup_date: new Date().toISOString(),
         owner_name: null,
         business_name: null,
@@ -993,29 +994,31 @@ async function handleNewEmail(email) {
 // ownerCommand's onboarding check (owner-command.js) the next time an email
 // arrives from the admin address.
 async function sendOnboardingEmail() {
-  const needsOwnerName = !config.owner_name;
-  const needsBusiness = !config.business_name;
-  if (!needsOwnerName && !needsBusiness) return;
-
   let profile;
   try {
     profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
   } catch (e) {
     return;
   }
+
+  const needsOwnerName = !config.owner_name;
+  const needsBusiness = !config.business_name;
+  const needsAgentName = !profile.agent_name_set;
+  if (!needsOwnerName && !needsBusiness && !needsAgentName) return;
   if (profile.onboarding_sent) return;
 
   const asks = [];
   if (needsOwnerName) asks.push('- Your name, so I know what to call you');
+  if (needsAgentName) asks.push('- What you\'d like to call me — I\'ll keep going by "Aigentik" if you skip this');
   if (needsBusiness) asks.push('- Your business name');
-  if (needsBusiness) asks.push('- A short description of what your business does');
+  if (needsBusiness) asks.push('- What your business does, and anything else about it I should know so I can answer questions from customers or subcontractors (services offered, service area, specialties, etc.)');
 
   await gmail.sendOwnerNotification(
     `👋 Hi! I'm ${config.aigentik_name}, your new AI assistant.\n\n` +
     `Before I start replying to emails and texts on your behalf, I need a couple things:\n\n` +
     asks.join('\n') + '\n\n' +
     `Just reply to this email in your own words, filling in the blanks — for example:\n` +
-    `"My name is [your name]. The business is [business name], [what the business does]."`
+    `"My name is [your name]. Call yourself [name you want me to go by]. The business is [business name], [what the business does and anything else customers or subcontractors might ask about]."`
   );
 
   profile.onboarding_sent = true;
