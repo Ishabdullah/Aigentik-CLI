@@ -68,13 +68,13 @@ function addToQueue({ type, sender, senderName, subject, body, draftReply, conta
 // Get item by display_id
 function getItem(displayId) {
   const queue = loadQueue();
-  return queue.find(i => i.display_id === parseInt(displayId)) || null;
+  return queue.find(i => i.display_id === parseInt(displayId, 10)) || null;
 }
 
 // Remove item from queue
 function removeItem(displayId) {
   const queue = loadQueue();
-  const idx = queue.findIndex(i => i.display_id === parseInt(displayId));
+  const idx = queue.findIndex(i => i.display_id === parseInt(displayId, 10));
   if (idx === -1) return false;
   queue.splice(idx, 1);
   saveQueue(queue);
@@ -85,7 +85,7 @@ function removeItem(displayId) {
 // Update draft reply for an item
 function updateDraft(displayId, newDraft) {
   const queue = loadQueue();
-  const idx = queue.findIndex(i => i.display_id === parseInt(displayId));
+  const idx = queue.findIndex(i => i.display_id === parseInt(displayId, 10));
   if (idx === -1) return false;
   queue[idx].draft_reply = newDraft;
   queue[idx].draft_edited = true;

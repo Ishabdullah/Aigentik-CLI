@@ -779,11 +779,11 @@ async function handleGoogleVoiceText(email) {
   if (schedulingHandled) return;
 
   const shouldAutoReply = contact?.reply_behavior === 'always' ||
-                          contact?.reply_behavior === 'auto' ||
-                          action === 'auto-reply';
+                          (contact?.reply_behavior !== 'review' && action === 'auto-reply');
 
   try {
-    const detectedTone = await tone.detectTone(voiceMsg.body);
+    const shouldDetectTone = config.behavior?.tone_matching !== false;
+    const detectedTone = shouldDetectTone ? await tone.detectTone(voiceMsg.body) : 'neutral';
     const reply = await llama.generateSmsReply(
       voiceMsg.sender_phone,
       voiceMsg.sender_name,
@@ -915,6 +915,12 @@ async function handleNewEmail(email) {
   });
   if (dncHandled) return;
 
+  // Check contact behavior
+  if (contact?.reply_behavior === 'never') {
+    log.info('index', 'Contact set to never reply — skipping');
+    return;
+  }
+
   const { action } = emailRules.checkRules({
     from: email.from_email,
     subject: email.subject,
@@ -946,6 +952,9 @@ async function handleNewEmail(email) {
   });
   if (schedulingHandled) return;
 
+  const shouldAutoReply = contact?.reply_behavior === 'always' ||
+                          (contact?.reply_behavior !== 'review' && action === 'auto-reply');
+
   try {
     const reply = await llama.generateEmailReply(
       email.from_name, email.from_email, email.subject,
@@ -955,7 +964,7 @@ async function handleNewEmail(email) {
       businessName, businessDescription
     );
 
-    if (action === 'auto-reply') {
+    if (shouldAutoReply) {
       await gmail.sendReply(email.from_email, email.subject, reply.text, reply.html);
       contacts.addHistory(email.from_email, { type: 'email_auto_replied' });
       await gmail.sendOwnerNotification(

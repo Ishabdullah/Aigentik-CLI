@@ -71,7 +71,7 @@ function saveScheduleConfig(scheduleConfig) {
 
 function generateAppointmentId(appointments) {
   const maxId = appointments.reduce((max, a) => {
-    const num = parseInt(a.id.replace('appt_', ''));
+    const num = parseInt((a.id || '').replace('appt_', ''), 10) || 0;
     return num > max ? num : max;
   }, 0);
   return `appt_${String(maxId + 1).padStart(4, '0')}`;
@@ -343,9 +343,8 @@ function findNextAvailableSlot({ afterDate, durationMinutes, preferredDate, excl
     const dayEnd = new Date(day);
     dayEnd.setHours(eh, em, 0, 0);
 
-    let slotStart = new Date(dayOffset === 0 && searchStart > dayStart ? searchStart : dayStart);
-    // Round up to the next 15-minute mark
-    slotStart.setMinutes(Math.ceil(slotStart.getMinutes() / 15) * 15, 0, 0);
+    const baseTime = dayOffset === 0 && searchStart > dayStart ? searchStart.getTime() : dayStart.getTime();
+    let slotStart = new Date(Math.ceil(baseTime / (15 * 60 * 1000)) * (15 * 60 * 1000));
 
     while (slotStart.getTime() + duration * 60 * 1000 <= dayEnd.getTime()) {
       const slotEnd = new Date(slotStart.getTime() + duration * 60 * 1000);
@@ -575,6 +574,9 @@ function rescheduleAppointment(id, newStart, newEnd) {
   const fromStart = appt.start;
   appt.start = new Date(newStart).toISOString();
   appt.end = new Date(newEnd).toISOString();
+  appt.status = 'confirmed';
+  appt.rsvp_status = 'pending';
+  appt.pending_reschedule = null;
   appt.ics_sequence = (appt.ics_sequence || 0) + 1;
   appt.updated_at = new Date().toISOString();
   appt.history.push({ event: 'rescheduled', at: appt.updated_at, from: fromStart, to: appt.start });

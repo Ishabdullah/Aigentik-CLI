@@ -46,22 +46,26 @@ function normalizeEmail(email) {
 // Generate a unique contact ID
 function generateId(contacts) {
   const maxId = contacts.reduce((max, c) => {
-    const num = parseInt(c.id.replace('contact_', ''));
+    const num = parseInt((c.id || '').replace('contact_', ''), 10) || 0;
     return num > max ? num : max;
   }, 0);
   return `contact_${String(maxId + 1).padStart(4, '0')}`;
 }
 
-// Find a contact by phone, email, or name
+// Find a contact by ID, phone, email, or name
 function findContact(identifier) {
   const contacts = loadContacts();
   if (!identifier) return null;
+
+  const directMatch = contacts.find(c => c.id === identifier);
+  if (directMatch) return directMatch;
 
   const normPhone = normalizePhone(identifier);
   const normEmail = normalizeEmail(identifier);
   const nameLower = identifier.toLowerCase().trim();
 
   return contacts.find(c => {
+    if (c.id === identifier) return true;
     if (normPhone && c.phones?.some(p => normalizePhone(p) === normPhone)) return true;
     if (normEmail && c.emails?.some(e => normalizeEmail(e) === normEmail)) return true;
     if (c.name?.toLowerCase() === nameLower) return true;
@@ -72,8 +76,7 @@ function findContact(identifier) {
   }) || null;
 }
 
-// Find a contact by its exact id — findContact() matches phone/email/name/
-// alias, never id, so this is the only reliable lookup once you have one
+// Find a contact by its exact id
 function getContactById(id) {
   if (!id) return null;
   return loadContacts().find(c => c.id === id) || null;
@@ -286,7 +289,7 @@ function updateContact(id, updates) {
 // Delete a contact entirely
 function deleteContact(identifier) {
   const contacts = loadContacts();
-  const contact = findContact(identifier) || findByRelationship(identifier);
+  const contact = getContactById(identifier) || findContact(identifier) || findByRelationship(identifier);
   if (!contact) return false;
   saveContacts(contacts.filter(c => c.id !== contact.id));
   log.info('contacts', `Contact deleted: ${contact.name || contact.id}`, { id: contact.id });
@@ -296,7 +299,7 @@ function deleteContact(identifier) {
 // Explicitly overwrite a contact's name (updateContact only fills in a missing name)
 function renameContact(identifier, newName) {
   const contacts = loadContacts();
-  const contact = findContact(identifier) || findByRelationship(identifier);
+  const contact = getContactById(identifier) || findContact(identifier) || findByRelationship(identifier);
   if (!contact) return null;
   const idx = contacts.findIndex(c => c.id === contact.id);
   contacts[idx].name = newName;
@@ -307,7 +310,7 @@ function renameContact(identifier, newName) {
 
 // Add a history entry to a contact
 function addHistory(identifier, historyEntry) {
-  const contact = findContact(identifier);
+  const contact = getContactById(identifier) || findContact(identifier);
   if (!contact) return;
 
   const contacts = loadContacts();
@@ -445,7 +448,7 @@ function findOrCreateByEmail(email, name, additionalInfo = {}) {
 
 // Set instructions for how to handle a specific contact
 function setContactInstructions(identifier, instructions, behavior) {
-  const contact = findContact(identifier) || findByRelationship(identifier);
+  const contact = getContactById(identifier) || findContact(identifier) || findByRelationship(identifier);
   if (!contact) return null;
   const contacts = loadContacts();
   const idx = contacts.findIndex(c => c.id === contact.id);

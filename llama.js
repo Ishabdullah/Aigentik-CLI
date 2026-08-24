@@ -92,6 +92,14 @@ function businessContext(businessName, businessDescription) {
     (businessDescription ? ', ' + businessDescription : '') + '.';
 }
 
+// Safely extracts a JSON object from model output even with conversational text
+function extractJson(raw) {
+  if (!raw) return null;
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  return JSON.parse(match[0]);
+}
+
 async function generateEmailReply(senderName, senderEmail, subject, body, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription) {
   const agent = agentName || config.aigentik_name || 'Aigentik';
   const owner = ownerName || 'my owner';
@@ -109,16 +117,18 @@ async function generateEmailReply(senderName, senderEmail, subject, body, relati
     instructionText = 'IMPORTANT: Special instructions for this contact: ' + contactInstructions;
   }
 
+  const senderDisplay = senderName ? `${senderName} <${senderEmail}>` : (senderEmail || 'unknown');
+
   const systemMsg = 'You are ' + agent + ', an AI personal assistant managing email on behalf of ' + owner + '.' +
     businessContext(businessName, businessDescription) + ' ' +
-    'You are replying to an email sent TO ' + owner + ' from ' + (senderName || senderEmail) + '. ' +
+    'You are replying to an email sent TO ' + owner + ' from ' + senderDisplay + '. ' +
     'Write a professional, natural email reply as ' + agent + ', ' + owner + '\'s assistant — NEVER claim to be ' + owner + ' or write as if you are them (no "this is ' + owner + '", no signing as ' + owner + '); if you introduce yourself, use your own name, ' + agent + '. ' +
     'Relationship to owner: ' + (relationship || 'unknown') + '. ' +
     (instructionText ? instructionText + '. ' : '') +
     'Do NOT add a signature — it will be added automatically. ' +
     'Reply with email body text only.';
 
-  const userMsg = 'Reply to this email received by ' + owner + ':\nFrom: ' + senderName + ' <' + senderEmail + '>\nSubject: ' + subject + '\nBody: ' + body;
+  const userMsg = 'Reply to this email received by ' + owner + ':\nFrom: ' + senderDisplay + '\nSubject: ' + (subject || '(no subject)') + '\nBody:\n"""\n' + (body || '') + '\n"""';
 
   const messages = [
     { role: 'system', content: systemMsg },
@@ -145,9 +155,11 @@ async function generateSmsReply(senderNumber, senderName, message, tone, relatio
     instructionText = 'IMPORTANT: Special instructions for this contact: ' + contactInstructions;
   }
 
+  const senderDisplay = senderName || senderNumber || 'unknown';
+
   const systemMsg = 'You are ' + agent + ', an AI personal assistant managing communications on behalf of ' + owner + '.' +
     businessContext(businessName, businessDescription) + ' ' +
-    'You are replying to a message sent TO ' + owner + ' from ' + (senderName || senderNumber) + '. ' +
+    'You are replying to a message sent TO ' + owner + ' from ' + senderDisplay + '. ' +
     'Write a natural, helpful reply as ' + agent + ', ' + owner + '\'s assistant — NEVER claim to be ' + owner + ' or write as if you are them (no "this is ' + owner + '", no signing as ' + owner + '); if you introduce yourself, use your own name, ' + agent + '. ' +
     'Match the tone: ' + (tone || 'neutral') + '. ' +
     'Relationship to owner: ' + (relationship || 'unknown') + '. ' +
@@ -156,7 +168,7 @@ async function generateSmsReply(senderNumber, senderName, message, tone, relatio
     'Do NOT add the signature — it will be added automatically. ' +
     'Reply with message text only, nothing else.';
 
-  const userMsg = 'Reply to this text message received by ' + owner + ':\nFrom: ' + (senderName || senderNumber) + '\nMessage: "' + message + '"';
+  const userMsg = 'Reply to this text message received by ' + owner + ':\nFrom: ' + senderDisplay + '\nMessage:\n"""\n' + (message || '') + '\n"""';
 
   const messages = [
     { role: 'system', content: systemMsg },
@@ -180,9 +192,11 @@ async function interpretCommand(commandText, context) {
   log.info('llama', 'Interpreting command', { command: commandText });
   const raw = await chat(messages, 256);
   try {
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const parsed = extractJson(raw);
+    if (parsed) return parsed;
+    throw new Error('No JSON object found in response');
   } catch (e) {
-    log.warn('llama', 'Failed to parse command JSON', { raw });
+    log.warn('llama', 'Failed to parse command JSON', { raw, error: e.message });
     return { action: 'unknown', target: null, content: commandText, confirm_required: false };
   }
 }
@@ -205,9 +219,11 @@ async function classifySchedulingIntent(text, context) {
   ];
   const raw = await chat(messages, 150);
   try {
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const parsed = extractJson(raw);
+    if (parsed) return parsed;
+    throw new Error('No JSON object found in response');
   } catch (e) {
-    log.warn('llama', 'Failed to parse scheduling intent JSON', { raw });
+    log.warn('llama', 'Failed to parse scheduling intent JSON', { raw, error: e.message });
     return { intent: 'none', raw_datetime_phrase: null, duration_hint_minutes: null };
   }
 }
@@ -272,9 +288,11 @@ async function extractSubcontractorDetails(text) {
   ];
   const raw = await chat(messages, 200);
   try {
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const parsed = extractJson(raw);
+    if (parsed) return parsed;
+    throw new Error('No JSON object found in response');
   } catch (e) {
-    log.warn('llama', 'Failed to parse extracted subcontractor details', { raw });
+    log.warn('llama', 'Failed to parse extracted subcontractor details', { raw, error: e.message });
     return { business_name: null, trade: null, phone: null, email: null, licensed: null, license_number: null, gl_insurance: null, wc_insurance: null, has_tools: null, crew_size: null, weekly_capacity: null };
   }
 }
@@ -288,9 +306,11 @@ async function extractContactDetails(text, fields) {
   ];
   const raw = await chat(messages, 200);
   try {
-    return JSON.parse(raw.replace(/```json|```/g, '').trim());
+    const parsed = extractJson(raw);
+    if (parsed) return parsed;
+    throw new Error('No JSON object found in response');
   } catch (e) {
-    log.warn('llama', 'Failed to parse extracted contact details', { raw });
+    log.warn('llama', 'Failed to parse extracted contact details', { raw, error: e.message });
     return fields.reduce((o, f) => { o[f] = null; return o; }, {});
   }
 }

@@ -3,6 +3,7 @@
 // Features: async/await, auto-reconnect, exponential backoff, connection pooling,
 // structured logging, TLS validation, secure authentication
 
+import fs from 'fs';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
@@ -430,9 +431,18 @@ class EmailProvider {
    * Execute a management operation with its own connection
    */
   async withManagementConnection(operation) {
-    const client = await this.getManagementConnection();
+    let client = await this.getManagementConnection();
     try {
       return await operation(client);
+    } catch (error) {
+      if (!this.isShuttingDown && (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || !client.usable || /closed|broken|destroy|timeout/i.test(error.message || ''))) {
+        this.logger.warn('email-provider', 'Management connection error, retrying with fresh client...', { error: error.message });
+        try { await client.logout(); } catch (e) {}
+        client = new ImapFlow(this.getImapConfig());
+        await client.connect();
+        return await operation(client);
+      }
+      throw error;
     } finally {
       await this.releaseManagementConnection(client);
     }
@@ -622,6 +632,7 @@ class EmailProvider {
     const fromName = this.config.aigentik_name || 'Aigentik';
 
     try {
+      const hasIcon = html && fs.existsSync(SIGNATURE_ICON_PATH);
       const info = await transporter.sendMail({
         from: `${fromName} <${this.senderAddress()}>`,
         to: toEmail,
@@ -629,11 +640,13 @@ class EmailProvider {
         text: body,
         ...(html ? {
           html,
-          attachments: [{
-            filename: 'restoricon-icon-thumb.png',
-            path: SIGNATURE_ICON_PATH,
-            cid: SIGNATURE_ICON_CID
-          }]
+          ...(hasIcon ? {
+            attachments: [{
+              filename: 'restoricon-icon-thumb.png',
+              path: SIGNATURE_ICON_PATH,
+              cid: SIGNATURE_ICON_CID
+            }]
+          } : {})
         } : {}),
         // Security headers
         headers: {

@@ -50,19 +50,27 @@ async function reply(message) {
 }
 
 // Handle a rename command
-function handleRename(newName) {
+async function handleRename(newName, customReply, silent = false) {
+  const replyFn = customReply || reply;
   try {
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
-    const oldName = profile.aigentik_name;
-    const name = newName.charAt(0).toUpperCase() + newName.slice(1).toLowerCase();
+    const oldName = profile.aigentik_name || 'Aigentik';
+    const trimmed = (newName || '').trim();
+    if (!trimmed) {
+      if (!silent) await replyFn('Please provide a valid name.');
+      return;
+    }
+    const name = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
     profile.aigentik_name = name;
     profile.agent_name_set = true;
     fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
     config.aigentik_name = name;
-    reply(`Done! I'll now go by "${name}" instead of "${oldName}". 😊`);
+    if (!silent) {
+      await replyFn(`Done! I'll now go by "${name}" instead of "${oldName}". 😊`);
+    }
     log.action('owner-command', `Renamed from ${oldName} to ${name}`);
   } catch (e) {
-    reply('Sorry, I had trouble saving the new name. Try again.');
+    if (!silent) await replyFn('Sorry, I had trouble saving the new name. Try again.');
   }
 }
 
@@ -78,11 +86,12 @@ function resolveIdentifiers(target) {
   return [...(contact.emails || []), ...(contact.phones || [])];
 }
 
-function handleBlockContact(target, reason) {
-  if (!target) { reply('Who should I block? Give me a name, email, or phone number.'); return; }
+async function handleBlockContact(target, reason, customReply) {
+  const replyFn = customReply || reply;
+  if (!target) { await replyFn('Who should I block? Give me a name, email, or phone number.'); return; }
   const identifiers = resolveIdentifiers(target);
   if (identifiers.length === 0) {
-    reply(`I couldn't find an email or phone for "${target}". Try the exact email or phone number.`);
+    await replyFn(`I couldn't find an email or phone for "${target}". Try the exact email or phone number.`);
     return;
   }
   identifiers.forEach(id => doNotContact.addToDoNotContact({
@@ -91,20 +100,21 @@ function handleBlockContact(target, reason) {
     reason: reason || 'blocked by owner',
     source: 'owner'
   }));
-  reply(`🚫 Blocked ${target} — ${identifiers.join(', ')}. I will never contact them again.`);
+  await replyFn(`🚫 Blocked ${target} — ${identifiers.join(', ')}. I will never contact them again.`);
   log.action('owner-command', `Owner blocked: ${target}`, { identifiers });
 }
 
-function handleUnblockContact(target) {
-  if (!target) { reply('Who should I unblock?'); return; }
+async function handleUnblockContact(target, customReply) {
+  const replyFn = customReply || reply;
+  if (!target) { await replyFn('Who should I unblock?'); return; }
   const identifiers = resolveIdentifiers(target);
   const candidates = identifiers.length ? identifiers : [target];
   const removed = candidates.filter(id => doNotContact.removeFromDoNotContact(id));
   if (removed.length === 0) {
-    reply(`"${target}" isn't on the do-not-contact list.`);
+    await replyFn(`"${target}" isn't on the do-not-contact list.`);
     return;
   }
-  reply(`✅ Unblocked ${target}.`);
+  await replyFn(`✅ Unblocked ${target}.`);
   log.action('owner-command', `Owner unblocked: ${target}`, { identifiers: removed });
 }
 
@@ -121,7 +131,8 @@ function markConfiguredIfComplete(profile) {
 // enough to start using it in prompts. ownerName is optional too — set
 // together with the business when the same message introduces both (the
 // common case for the first-run onboarding reply — see index.js).
-function handleSetBusinessInfo(businessName, businessDescription, ownerName) {
+async function handleSetBusinessInfo(businessName, businessDescription, ownerName, customReply) {
+  const replyFn = customReply || reply;
   try {
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
     const parts = [];
@@ -145,11 +156,11 @@ function handleSetBusinessInfo(businessName, businessDescription, ownerName) {
 
     markConfiguredIfComplete(profile);
     fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
-    reply(`Got it — ${parts.join('. ')}. 😊`);
+    await replyFn(`Got it — ${parts.join('. ')}. 😊`);
     log.action('owner-command', `Business info set: ${businessName} — ${profile.business_description || 'no description'}` +
       (ownerName ? `, owner: ${ownerName}` : ''));
   } catch (e) {
-    reply('Sorry, I had trouble saving that. Try again.');
+    await replyFn('Sorry, I had trouble saving that. Try again.');
   }
 }
 
@@ -159,7 +170,8 @@ function handleSetBusinessInfo(businessName, businessDescription, ownerName) {
 // corrects their name later), but always says what it replaced so an
 // unintended overwrite — e.g. the model misfiring on an unrelated message —
 // is obvious immediately rather than silent.
-function handleSetOwnerName(ownerName) {
+async function handleSetOwnerName(ownerName, customReply) {
+  const replyFn = customReply || reply;
   try {
     const profile = JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
     const oldName = profile.owner_name;
@@ -167,12 +179,12 @@ function handleSetOwnerName(ownerName) {
     markConfiguredIfComplete(profile);
     fs.writeFileSync(PROFILE_FILE, JSON.stringify(profile, null, 2));
     config.owner_name = ownerName;
-    reply(oldName && oldName !== ownerName
+    await replyFn(oldName && oldName !== ownerName
       ? `Got it — I'll call you ${ownerName} instead of ${oldName}. 😊`
       : `Got it — I'll call you ${ownerName}. 😊`);
     log.action('owner-command', `Owner name set: ${ownerName}` + (oldName ? ` (was ${oldName})` : ''));
   } catch (e) {
-    reply('Sorry, I had trouble saving that. Try again.');
+    await replyFn('Sorry, I had trouble saving that. Try again.');
   }
 }
 
@@ -265,13 +277,13 @@ async function handleOwnerCommand(sms) {
 
   // Block shorthand — "block [name/email/phone]"
   if (lower.startsWith('block ')) {
-    handleBlockContact(text.substring(6).trim());
+    await handleBlockContact(text.substring(6).trim());
     return;
   }
 
   // Unblock shorthand — "unblock [name/email/phone]"
   if (lower.startsWith('unblock ')) {
-    handleUnblockContact(text.substring(8).trim());
+    await handleUnblockContact(text.substring(8).trim());
     return;
   }
 
@@ -286,24 +298,24 @@ async function handleOwnerCommand(sms) {
                        contacts.findByRelationship(target);
 
     if (!exactMatch || !exactMatch.emails?.length) {
-      reply('I need an email address for "' + target + '". Say "add contact ' + target + ' email [address]"');
+      await reply('I need an email address for "' + target + '". Say "add contact ' + target + ' email [address]"');
       return;
     }
 
     if (doNotContact.isBlocked(exactMatch.emails[0])) {
-      reply('🚫 ' + (exactMatch.name || target) + ' (' + exactMatch.emails[0] + ') is on your do-not-contact list — I won\'t send this.');
+      await reply('🚫 ' + (exactMatch.name || target) + ' (' + exactMatch.emails[0] + ') is on your do-not-contact list — I won\'t send this.');
       return;
     }
 
     try {
-      reply('✍️ Generating email to ' + (exactMatch.name || target) + ' about "' + topic + '"...');
+      await reply('✍️ Generating email to ' + (exactMatch.name || target) + ' about "' + topic + '"...');
       const content = await llama.generateContent(topic, 'email', 'To: ' + (exactMatch.name || target));
       const subject = topic.charAt(0).toUpperCase() + topic.slice(1);
       const { sendEmail } = await import('./gmail.js');
       await sendEmail(exactMatch.emails[0], subject, content);
-      reply('✅ Email sent to ' + (exactMatch.name || target) + ' (' + exactMatch.emails[0] + ')\nSubject: ' + subject);
+      await reply('✅ Email sent to ' + (exactMatch.name || target) + ' (' + exactMatch.emails[0] + ')\nSubject: ' + subject);
     } catch (e) {
-      reply('❌ Failed to send email: ' + e.message);
+      await reply('❌ Failed to send email: ' + e.message);
     }
     return;
   }
@@ -311,7 +323,7 @@ async function handleOwnerCommand(sms) {
   // Rename command
   if (lower.startsWith('rename ')) {
     const newName = text.substring(7).trim();
-    if (newName) { handleRename(newName); return; }
+    if (newName) { await handleRename(newName); return; }
   }
 
   // --- Use AI to interpret everything else ---
@@ -330,7 +342,7 @@ async function handleOwnerCommand(sms) {
 
   } catch (e) {
     log.error('owner-command', 'Failed to interpret command', { error: e.message });
-    reply(`Sorry, I had trouble understanding that command. Could you rephrase it?`);
+    await reply(`Sorry, I had trouble understanding that command. Could you rephrase it?`);
   }
 }
 
@@ -340,17 +352,18 @@ async function executeInterpretedCommand(cmd, originalText, name) {
   try { gmail = await import('./gmail.js'); } catch (e) {}
 
   // agent_name can ride alongside any action (e.g. the same onboarding reply
-  // that also sets the owner's name and the business) — handled once here,
-  // separately from whatever the primary action below does.
+  // that also sets the owner's name and the business) — handled once here.
+  // When set_business_info also has an agent_name, rename silently so the
+  // business info confirmation sends a single unified reply.
   if (cmd.agent_name && cmd.action !== 'set_agent_name') {
-    handleRename(cmd.agent_name);
+    await handleRename(cmd.agent_name, reply, cmd.action === 'set_business_info');
   }
 
   switch (cmd.action) {
     case 'set_agent_name': {
       const newName = cmd.target || cmd.agent_name;
-      if (!newName) { reply('What would you like me to go by?'); break; }
-      handleRename(newName);
+      if (!newName) { await reply('What would you like me to go by?'); break; }
+      await handleRename(newName);
       break;
     }
     case 'delete_all_emails': {
@@ -967,83 +980,83 @@ Return ONLY JSON.`;
     case 'set_business_info': {
       const businessName = cmd.target;
       if (!businessName) {
-        reply('What\'s the business name? Example: "the business name is Acme Restoration and we do home improvement, specializing in water damage restoration"');
+        await reply('What\'s the business name? Example: "the business name is Acme Restoration and we do home improvement, specializing in water damage restoration"');
         break;
       }
-      handleSetBusinessInfo(businessName, cmd.content, cmd.owner_name);
+      await handleSetBusinessInfo(businessName, cmd.content, cmd.owner_name);
       break;
     }
 
     case 'set_owner_name': {
       const ownerName = cmd.target;
       if (!ownerName) {
-        reply('What\'s your name?');
+        await reply('What\'s your name?');
         break;
       }
-      handleSetOwnerName(ownerName);
+      await handleSetOwnerName(ownerName);
       break;
     }
 
     case 'find_contact': {
       const searchTerm = cmd.target;
-      if (!searchTerm) { reply('Who are you looking for?'); break; }
+      if (!searchTerm) { await reply('Who are you looking for?'); break; }
 
       const exactMatch = contacts.findContact(searchTerm) ||
                          contacts.findByRelationship(searchTerm);
 
       if (exactMatch) {
-        reply('📒 Found:\n' + contacts.formatContactInfo(exactMatch));
+        await reply('📒 Found:\n' + contacts.formatContactInfo(exactMatch));
         break;
       }
 
       const allMatches = contacts.findAllByName(searchTerm);
 
       if (allMatches.length === 0) {
-        reply('No contact found for "' + searchTerm + '".\n\nTry "sync contacts" to refresh from your phone.');
+        await reply('No contact found for "' + searchTerm + '".\n\nTry "sync contacts" to refresh from your phone.');
         break;
       }
 
       if (allMatches.length === 1) {
-        reply('📒 Found:\n' + contacts.formatContactInfo(allMatches[0]));
+        await reply('📒 Found:\n' + contacts.formatContactInfo(allMatches[0]));
         break;
       }
 
       const names = allMatches.map((c, i) => (i + 1) + '. ' + (c.name || c.phones?.[0] || c.id)).join('\n');
-      reply('Found ' + allMatches.length + ' contacts named "' + searchTerm + '":\n\n' + names + '\n\nWhich one? Reply with the full name.');
+      await reply('Found ' + allMatches.length + ' contacts named "' + searchTerm + '":\n\n' + names + '\n\nWhich one? Reply with the full name.');
       break;
     }
 
     case 'sync_contacts': {
-      reply('🔄 Syncing contacts from your phone...');
+      await reply('🔄 Syncing contacts from your phone...');
       const result = contactsSync.syncContacts();
-      reply('✅ Done!\n📱 ' + result.added + ' new\n🔄 ' + result.updated + ' updated\n👥 ' + result.total + ' total');
+      await reply('✅ Done!\n📱 ' + result.added + ' new\n🔄 ' + result.updated + ' updated\n👥 ' + result.total + ' total');
       break;
     }
 
     case 'list_contacts':
-      reply(`📒 Contacts:\n${contacts.listContacts()}`);
+      await reply(`📒 Contacts:\n${contacts.listContacts()}`);
       break;
 
     case 'list_subcontractors_by_trade': {
       const tradeQuery = cmd.target;
-      if (!tradeQuery) { reply('Which trade?'); break; }
+      if (!tradeQuery) { await reply('Which trade?'); break; }
       const matches = contacts.findSubcontractorsByTrade(tradeQuery);
       if (matches.length === 0) {
-        reply(`I don't have any subcontractors on file for "${tradeQuery}".`);
+        await reply(`I don't have any subcontractors on file for "${tradeQuery}".`);
         break;
       }
       const list = matches.map(c => contacts.formatContact(c)).join('\n');
-      reply(`🛠️ ${matches.length} subcontractor(s) for "${tradeQuery}":\n${list}`);
+      await reply(`🛠️ ${matches.length} subcontractor(s) for "${tradeQuery}":\n${list}`);
       break;
     }
 
     case 'block_contact': {
-      handleBlockContact(cmd.target, cmd.content);
+      await handleBlockContact(cmd.target, cmd.content);
       break;
     }
 
     case 'unblock_contact': {
-      handleUnblockContact(cmd.target);
+      await handleUnblockContact(cmd.target);
       break;
     }
 

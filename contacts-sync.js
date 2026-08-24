@@ -9,7 +9,7 @@ import { loadContacts, saveContacts, normalizePhone } from './contacts.js';
 function generateId(contacts) {
   let max = 0;
   for (const c of contacts) {
-    const num = parseInt((c.id || '').replace('contact_', '') || '0');
+    const num = parseInt((c.id || '').replace('contact_', '') || '0', 10);
     if (num > max) max = num;
   }
   return 'contact_' + String(max + 1).padStart(4, '0');
@@ -34,13 +34,13 @@ function fetchAndroidContacts() {
 function syncContacts() {
   log.info('contacts-sync', 'Syncing Android contacts...');
 
+  const aigentikContacts = loadContacts();
   const androidContacts = fetchAndroidContacts();
   if (androidContacts.length === 0) {
     log.warn('contacts-sync', 'No Android contacts found');
-    return;
+    return { android: 0, added: 0, updated: 0, total: aigentikContacts.length };
   }
 
-  const aigentikContacts = loadContacts();
   let added = 0;
   let updated = 0;
 
@@ -59,11 +59,23 @@ function syncContacts() {
         aliases: [ac.name.toLowerCase()],
         phones: [ac.number],
         emails: [],
+        address: null,
         relationship: null,
         type: 'person',
         notes: null,
         instructions: null,
         reply_behavior: 'auto',
+        business_name: null,
+        trade: null,
+        trade_raw: null,
+        licensed: null,
+        license_number: null,
+        gl_insurance: null,
+        wc_insurance: null,
+        has_tools: null,
+        crew_size: null,
+        weekly_capacity: null,
+        references: [],
         source: 'android_contacts',
         first_seen: new Date().toISOString(),
         last_contact: null,
