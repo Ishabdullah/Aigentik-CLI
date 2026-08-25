@@ -15,6 +15,7 @@ import * as contactsSync from './contacts-sync.js';
 import { normalizeTrade } from './trades.js';
 import * as doNotContact from './do-not-contact.js';
 import * as recruiter from './subcontractor-recruiter.js';
+import * as customerModule from './customer-module.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -288,14 +289,38 @@ async function handleOwnerCommand(sms) {
     return;
   }
 
-  // Subcontractor profile shorthand — "subcontractor [name/id]"
-  if (lower.startsWith('subcontractor ') && !lower.startsWith('subcontractor pipeline') && !lower.startsWith('subcontractor followups')) {
-    const target = text.substring(14).trim();
-    const sub = recruiter.findSubcontractor(target);
-    if (!sub) {
-      reply(`No subcontractor found matching "${target}".`);
+  // Show customer CRM pipeline report
+  if (lower === 'customers' || lower === 'customer pipeline' || lower === 'customer leads') {
+    reply(customerModule.formatCustomerPipelineReport());
+    return;
+  }
+
+  // Show pending customer follow-ups
+  if (lower === 'customer followups' || lower === 'customer follow-ups' || lower === 'client followups') {
+    reply(customerModule.formatCustomerFollowupList());
+    return;
+  }
+
+  // Show hot leads
+  if (lower === 'hot leads' || lower === 'hot customers') {
+    const custs = customerModule.loadCustomers().filter(c => c.lead_score === 'HOT');
+    if (custs.length === 0) {
+      reply('No HOT leads currently in pipeline.');
     } else {
-      reply(recruiter.formatSubcontractorSummary(sub));
+      const list = custs.map(c => `🔥 ${c.customer_name} [${c.customer_id}] — ${c.project_type || c.project_category || 'General'} | Status: ${c.lead_status} | Phone: ${c.phone || 'N/A'}`).join('\n');
+      reply(`🔥 Hot Leads (${custs.length}):\n${list}`);
+    }
+    return;
+  }
+
+  // Customer profile shorthand — "customer [name/id/phone]"
+  if (lower.startsWith('customer ') && !lower.startsWith('customer pipeline') && !lower.startsWith('customer followups') && !lower.startsWith('customer follow-ups') && !lower.startsWith('customer leads')) {
+    const target = text.substring(9).trim();
+    const cust = customerModule.findCustomer(target);
+    if (!cust) {
+      reply(`No customer found matching "${target}".`);
+    } else {
+      reply(customerModule.formatCustomerSummary(cust));
     }
     return;
   }
@@ -1191,6 +1216,78 @@ Return ONLY JSON.`;
 
     case 'list_subcontractor_followups': {
       await reply(recruiter.formatFollowupList());
+      break;
+    }
+
+    case 'list_customers': {
+      await reply(customerModule.formatCustomerPipelineReport());
+      break;
+    }
+
+    case 'show_customer_profile': {
+      const target = cmd.target;
+      if (!target) { await reply("Which customer? Say 'customer [name/id/phone]'"); break; }
+      const cust = customerModule.findCustomer(target);
+      if (!cust) {
+        await reply(`Customer "${target}" not found.`);
+      } else {
+        await reply(customerModule.formatCustomerSummary(cust));
+      }
+      break;
+    }
+
+    case 'list_customer_followups': {
+      await reply(customerModule.formatCustomerFollowupList());
+      break;
+    }
+
+    case 'list_hot_leads': {
+      const custs = customerModule.loadCustomers().filter(c => c.lead_score === 'HOT');
+      if (custs.length === 0) {
+        await reply('No HOT leads currently in pipeline.');
+      } else {
+        const list = custs.map(c => `🔥 ${c.customer_name} [${c.customer_id}] — ${c.project_type || c.project_category || 'General'} | Status: ${c.lead_status} | Phone: ${c.phone || 'N/A'}`).join('\n');
+        await reply(`🔥 Hot Leads (${custs.length}):\n${list}`);
+      }
+      break;
+    }
+
+    case 'update_customer_status': {
+      const target = cmd.target;
+      const newStatus = (cmd.content || '').toUpperCase().trim();
+      if (!target || !newStatus) {
+        await reply("Please specify customer and status, e.g. 'update customer John status QUALIFIED'");
+        break;
+      }
+      const cust = customerModule.findCustomer(target);
+      if (!cust) {
+        await reply(`Customer "${target}" not found.`);
+        break;
+      }
+      const updated = customerModule.updateCustomer(cust.customer_id, { lead_status: newStatus });
+      await reply(`✅ Updated ${updated.customer_name} [${updated.customer_id}] status to ${newStatus}.`);
+      log.action('owner-command', `update_customer_status: ${updated.customer_id} -> ${newStatus}`);
+      break;
+    }
+
+    case 'escalate_customer': {
+      const target = cmd.target;
+      if (!target) { await reply("Which customer?"); break; }
+      const cust = customerModule.findCustomer(target);
+      if (!cust) {
+        await reply(`Customer "${target}" not found.`);
+        break;
+      }
+      const updated = customerModule.updateCustomer(cust.customer_id, {
+        escalation_status: 'HUMAN_REVIEW_REQUIRED'
+      });
+      const handoff = customerModule.formatHandoffSummary({
+        customer: updated,
+        issue: cmd.content || 'Owner-requested human escalation',
+        urgency: 'High'
+      });
+      await reply(handoff);
+      log.action('owner-command', `escalate_customer: ${updated.customer_id}`);
       break;
     }
 

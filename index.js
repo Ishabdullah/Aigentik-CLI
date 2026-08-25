@@ -27,6 +27,7 @@ import * as calendarModule from './calendar.js';
 import * as subcontractorForm from './subcontractor-form.js';
 import * as doNotContact from './do-not-contact.js';
 import * as recruiter from './subcontractor-recruiter.js';
+import * as customerModule from './customer-module.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -843,22 +844,64 @@ async function handleGoogleVoiceText(email) {
         businessDescription
       });
     } else {
-      const shouldDetectTone = config.behavior?.tone_matching !== false;
-      const detectedTone = shouldDetectTone ? await tone.detectTone(voiceMsg.body) : 'neutral';
-      const contactRole = contact?.relationship ||
-                          (contact?.type === 'business' ? 'business partner' : 'homeowner/customer');
-      reply = await llama.generateSmsReply(
-        voiceMsg.sender_phone,
-        voiceMsg.sender_name,
-        voiceMsg.body,
-        detectedTone,
-        contactRole,
-        contact?.instructions,
-        ownerName,
+      const isEmergency = customerModule.checkEmergencyKeywords(voiceMsg.body);
+      const isEscalation = customerModule.checkEscalationKeywords(voiceMsg.body);
+
+      const custRecord = customerModule.findCustomer(voiceMsg.sender_phone) ||
+                         (contact?.id ? customerModule.findCustomer(contact.id) : null);
+
+      let extracted = {};
+      try {
+        extracted = await llama.extractCustomerIntake(voiceMsg.body, custRecord || {});
+      } catch (err) {
+        log.warn('index', 'Failed to extract customer intake details', { error: err.message });
+      }
+
+      let currentCust = custRecord;
+      if (!currentCust) {
+        currentCust = customerModule.createOrUpdateCustomer({
+          customer_name: voiceMsg.sender_name || extracted.customer_name || 'Homeowner',
+          phone: voiceMsg.sender_phone,
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : null),
+          ...extracted
+        });
+      } else {
+        currentCust = customerModule.updateCustomer(currentCust.customer_id, {
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : currentCust.escalation_status),
+          ...extracted
+        });
+      }
+
+      if (isEmergency) {
+        const handoff = customerModule.formatHandoffSummary({
+          customer: currentCust,
+          issue: '🚨 ACTIVE EMERGENCY DETECTED (Water/Fire/Safety/Structural)',
+          urgency: 'Immediate',
+          whatCustomerWants: 'Immediate emergency response / stabilization',
+          nextAction: 'Call customer immediately and dispatch emergency mitigation team'
+        });
+        await gmail.sendOwnerNotification(handoff);
+      } else if (isEscalation) {
+        const handoff = customerModule.formatHandoffSummary({
+          customer: currentCust,
+          issue: '⚠️ HUMAN REVIEW / ESCALATION REQUESTED',
+          urgency: 'High',
+          whatCustomerWants: extracted.escalation_reason || 'Speak with Restoricon manager/owner'
+        });
+        await gmail.sendOwnerNotification(handoff);
+      }
+
+      reply = await llama.generateCustomerReply({
+        channel: 'sms',
+        senderPhone: voiceMsg.sender_phone,
+        senderName: voiceMsg.sender_name,
+        message: voiceMsg.body,
+        customer: currentCust,
         agentName,
+        ownerName,
         businessName,
         businessDescription
-      );
+      });
     }
 
     if (shouldAutoReply) {
@@ -1059,15 +1102,66 @@ async function handleNewEmail(email) {
         businessDescription
       });
     } else {
-      const contactRole = contact?.relationship ||
-                          (contact?.type === 'business' ? 'business partner' : 'homeowner/customer');
-      reply = await llama.generateEmailReply(
-        email.from_name, email.from_email, email.subject,
-        email.body?.substring(0, 1000),
-        contactRole, contact?.instructions,
-        ownerName, agentName,
-        businessName, businessDescription
-      );
+      const fullEmailContent = `${email.subject || ''}\n\n${email.body || ''}`;
+      const isEmergency = customerModule.checkEmergencyKeywords(fullEmailContent);
+      const isEscalation = customerModule.checkEscalationKeywords(fullEmailContent);
+
+      const custRecord = customerModule.findCustomer(email.from_email) ||
+                         (contact?.id ? customerModule.findCustomer(contact.id) : null);
+
+      let extracted = {};
+      try {
+        extracted = await llama.extractCustomerIntake(fullEmailContent, custRecord || {});
+      } catch (err) {
+        log.warn('index', 'Failed to extract customer intake from email', { error: err.message });
+      }
+
+      let currentCust = custRecord;
+      if (!currentCust) {
+        currentCust = customerModule.createOrUpdateCustomer({
+          customer_name: email.from_name || extracted.customer_name || 'Homeowner',
+          email: email.from_email,
+          lead_source: 'incoming_email',
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : null),
+          ...extracted
+        });
+      } else {
+        currentCust = customerModule.updateCustomer(currentCust.customer_id, {
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : currentCust.escalation_status),
+          ...extracted
+        });
+      }
+
+      if (isEmergency) {
+        const handoff = customerModule.formatHandoffSummary({
+          customer: currentCust,
+          issue: '🚨 ACTIVE EMERGENCY DETECTED VIA EMAIL',
+          urgency: 'Immediate',
+          whatCustomerWants: 'Emergency restoration / stabilization assessment',
+          nextAction: 'Contact customer immediately by phone/email and dispatch emergency team'
+        });
+        await gmail.sendOwnerNotification(handoff);
+      } else if (isEscalation) {
+        const handoff = customerModule.formatHandoffSummary({
+          customer: currentCust,
+          issue: '⚠️ HUMAN REVIEW / ESCALATION REQUESTED VIA EMAIL',
+          urgency: 'High',
+          whatCustomerWants: extracted.escalation_reason || 'Direct communication with owner/manager'
+        });
+        await gmail.sendOwnerNotification(handoff);
+      }
+
+      reply = await llama.generateCustomerReply({
+        channel: 'email',
+        senderEmail: email.from_email,
+        senderName: email.from_name,
+        message: fullEmailContent,
+        customer: currentCust,
+        agentName,
+        ownerName,
+        businessName,
+        businessDescription
+      });
     }
 
     if (shouldAutoReply) {
