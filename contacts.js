@@ -196,6 +196,8 @@ function createContact({ name, phones, emails, relationship, type, notes, source
     notes: notes || null,
     instructions: null,
     reply_behavior: 'auto',
+    roles: type === 'subcontractor' ? ['SUBCONTRACTOR'] : ['CUSTOMER'],
+    active_role: type === 'subcontractor' ? 'SUBCONTRACTOR' : 'CUSTOMER',
     // Subcontractor-specific fields — stay null/empty for every other
     // contact type, populated from a parsed application (see
     // applySubcontractorDetails / subcontractor-form.js).
@@ -262,6 +264,12 @@ function updateContact(id, updates) {
   if (updates.name && !contact.name) contact.name = updates.name;
   if (updates.relationship) contact.relationship = updates.relationship;
   if (updates.type) contact.type = updates.type;
+  if (updates.roles) {
+    const existing = new Set(contact.roles || []);
+    [updates.roles].flat().filter(Boolean).forEach(r => existing.add(r));
+    contact.roles = Array.from(existing);
+  }
+  if (updates.active_role) contact.active_role = updates.active_role;
   if (updates.notes) contact.notes = updates.notes;
   if (updates.address) contact.address = updates.address;
   if (updates.business_name) contact.business_name = updates.business_name;

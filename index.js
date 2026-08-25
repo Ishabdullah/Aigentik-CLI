@@ -28,6 +28,7 @@ import * as subcontractorForm from './subcontractor-form.js';
 import * as doNotContact from './do-not-contact.js';
 import * as recruiter from './subcontractor-recruiter.js';
 import * as customerModule from './customer-module.js';
+import * as roleRouter from './role-router.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -606,6 +607,13 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
     return await handleRescheduleReply({ appt: pendingReschedule, text, reply, adminEmail, senderLabel });
   }
 
+  // A known subcontractor with no negotiation/reschedule already in flight
+  // (both handled above, unconditionally) isn't a homeowner requesting an
+  // appointment — let role-router route them into the subcontractor flow
+  // instead of the customer-appointment classifier below.
+  const isKnownSubcontractor = contact?.active_role === 'SUBCONTRACTOR' || contact?.type === 'subcontractor';
+  if (isKnownSubcontractor) return false;
+
   // No keyword pre-filter here on purpose: a service/estimate inquiry
   // ("can you paint my house, what's the cost?") is exactly the kind of
   // message that needs to turn into an appointment, and it often won't
@@ -804,27 +812,45 @@ async function handleGoogleVoiceText(email) {
                           (contact?.reply_behavior !== 'review' && action === 'auto-reply');
 
   try {
-    const subRecord = recruiter.findSubcontractor(voiceMsg.sender_phone) ||
-      (contact?.type === 'subcontractor' ? recruiter.findSubcontractor(contact.name || contact.business_name) : null);
+    const person = roleRouter.resolvePersonAndRoles({
+      phone: voiceMsg.sender_phone,
+      name: voiceMsg.sender_name
+    });
+
+    const classification = await roleRouter.detectRoleAndIntent({
+      message: voiceMsg.body,
+      person,
+      channel: 'sms'
+    });
+
+    log.info('index', `Role classification for ${voiceMsg.sender_phone}: Role=${classification.detected_role}, Intent=${classification.detected_intent}, Workflow=${classification.workflow}`);
 
     let reply = '';
-    if (subRecord || contact?.type === 'subcontractor') {
-      // Subcontractor recruitment message handling
+
+    if (classification.workflow === roleRouter.WORKFLOWS.AMBIGUOUS_CLARIFICATION) {
+      reply = (classification.clarification_needed ||
+        "Thank you for reaching out to Restoricon! Are you looking to get work done on your own property, or are you inquiring about trade subcontractor opportunities with us?") +
+        "\n\n— " + agentName + ", Restoricon";
+    } else if (
+      classification.workflow === roleRouter.WORKFLOWS.SUBCONTRACTOR_RECRUITMENT ||
+      classification.workflow === roleRouter.WORKFLOWS.SUBCONTRACTOR_ACTIVE ||
+      classification.detected_role === roleRouter.ROLES.SUBCONTRACTOR
+    ) {
       let extracted = {};
       try {
-        extracted = await llama.extractRecruiterQualification(voiceMsg.body, subRecord || {});
+        extracted = await llama.extractRecruiterQualification(voiceMsg.body, person.subcontractor_record || {});
       } catch (err) {
         log.warn('index', 'Failed to extract recruiter qualification details', { error: err.message });
       }
 
-      let currentSub = subRecord;
+      let currentSub = person.subcontractor_record;
       if (!currentSub) {
         currentSub = recruiter.createOrUpdateSubcontractorLead({
           contact_id: contact?.id,
           contact_name: voiceMsg.sender_name,
           phone: voiceMsg.sender_phone,
-          company_name: extracted.company_name || voiceMsg.sender_name,
-          primary_trade: extracted.primary_trade || contact?.trade,
+          company_name: extracted.company_name || person.organization?.company_name || voiceMsg.sender_name,
+          primary_trade: extracted.primary_trade || person.organization?.trade || contact?.trade,
           lead_source: 'incoming_sms',
           ...extracted
         });
@@ -843,21 +869,22 @@ async function handleGoogleVoiceText(email) {
         businessName,
         businessDescription
       });
-    } else {
+    } else if (
+      classification.workflow === roleRouter.WORKFLOWS.CUSTOMER_INTAKE_SALES ||
+      classification.workflow === roleRouter.WORKFLOWS.CUSTOMER_SUPPORT ||
+      classification.detected_role === roleRouter.ROLES.CUSTOMER
+    ) {
       const isEmergency = customerModule.checkEmergencyKeywords(voiceMsg.body);
       const isEscalation = customerModule.checkEscalationKeywords(voiceMsg.body);
 
-      const custRecord = customerModule.findCustomer(voiceMsg.sender_phone) ||
-                         (contact?.id ? customerModule.findCustomer(contact.id) : null);
-
       let extracted = {};
       try {
-        extracted = await llama.extractCustomerIntake(voiceMsg.body, custRecord || {});
+        extracted = await llama.extractCustomerIntake(voiceMsg.body, person.customer_record || {});
       } catch (err) {
         log.warn('index', 'Failed to extract customer intake details', { error: err.message });
       }
 
-      let currentCust = custRecord;
+      let currentCust = person.customer_record;
       if (!currentCust) {
         currentCust = customerModule.createOrUpdateCustomer({
           customer_name: voiceMsg.sender_name || extracted.customer_name || 'Homeowner',
@@ -902,7 +929,30 @@ async function handleGoogleVoiceText(email) {
         businessName,
         businessDescription
       });
+    } else {
+      const shouldDetectTone = config.behavior?.tone_matching !== false;
+      const detectedTone = shouldDetectTone ? await tone.detectTone(voiceMsg.body) : 'neutral';
+      const contactRole = contact?.relationship || 'acquaintance';
+      reply = await llama.generateSmsReply(
+        voiceMsg.sender_phone,
+        voiceMsg.sender_name,
+        voiceMsg.body,
+        detectedTone,
+        contactRole,
+        contact?.instructions,
+        ownerName,
+        agentName,
+        businessName,
+        businessDescription
+      );
     }
+
+    // Update multi-roles and active role in contacts memory
+    roleRouter.updatePersonRolesAndState({
+      person,
+      classification,
+      contactId: contact?.id
+    });
 
     if (shouldAutoReply) {
       await gmail.replyToGoogleVoiceText(voiceMsg, reply);
@@ -1063,26 +1113,50 @@ async function handleNewEmail(email) {
                           (contact?.reply_behavior !== 'review' && action === 'auto-reply');
 
   try {
-    const subRecord = recruiter.findSubcontractor(email.from_email) ||
-      (contact?.type === 'subcontractor' ? recruiter.findSubcontractor(contact.name || contact.business_name) : null);
+    const fullEmailContent = `${email.subject || ''}\n\n${email.body || ''}`;
+    const person = roleRouter.resolvePersonAndRoles({
+      email: email.from_email,
+      name: email.from_name
+    });
+
+    const classification = await roleRouter.detectRoleAndIntent({
+      message: fullEmailContent,
+      person,
+      channel: 'email'
+    });
+
+    log.info('index', `Email role classification for ${email.from_email}: Role=${classification.detected_role}, Intent=${classification.detected_intent}, Workflow=${classification.workflow}`);
 
     let reply;
-    if (subRecord || contact?.type === 'subcontractor') {
+
+    if (classification.workflow === roleRouter.WORKFLOWS.AMBIGUOUS_CLARIFICATION) {
+      const clarifyText = (classification.clarification_needed ||
+        "Thank you for contacting Restoricon! Are you inquiring about a remodeling or restoration project for your home, or are you looking to partner with us as a trade subcontractor?") +
+        "\n\n— " + agentName + ", Restoricon, LLC";
+      reply = {
+        text: clarifyText,
+        html: `<p>${clarifyText.replace(/\n\n/g, '</p><p>')}</p>`
+      };
+    } else if (
+      classification.workflow === roleRouter.WORKFLOWS.SUBCONTRACTOR_RECRUITMENT ||
+      classification.workflow === roleRouter.WORKFLOWS.SUBCONTRACTOR_ACTIVE ||
+      classification.detected_role === roleRouter.ROLES.SUBCONTRACTOR
+    ) {
       let extracted = {};
       try {
-        extracted = await llama.extractRecruiterQualification(email.body || '', subRecord || {});
+        extracted = await llama.extractRecruiterQualification(email.body || '', person.subcontractor_record || {});
       } catch (err) {
         log.warn('index', 'Failed to extract recruiter qualification from email', { error: err.message });
       }
 
-      let currentSub = subRecord;
+      let currentSub = person.subcontractor_record;
       if (!currentSub) {
         currentSub = recruiter.createOrUpdateSubcontractorLead({
           contact_id: contact?.id,
           contact_name: email.from_name,
           email: email.from_email,
-          company_name: extracted.company_name || email.from_name,
-          primary_trade: extracted.primary_trade || contact?.trade,
+          company_name: extracted.company_name || person.organization?.company_name || email.from_name,
+          primary_trade: extracted.primary_trade || person.organization?.trade || contact?.trade,
           lead_source: 'incoming_email',
           ...extracted
         });
@@ -1101,22 +1175,22 @@ async function handleNewEmail(email) {
         businessName,
         businessDescription
       });
-    } else {
-      const fullEmailContent = `${email.subject || ''}\n\n${email.body || ''}`;
+    } else if (
+      classification.workflow === roleRouter.WORKFLOWS.CUSTOMER_INTAKE_SALES ||
+      classification.workflow === roleRouter.WORKFLOWS.CUSTOMER_SUPPORT ||
+      classification.detected_role === roleRouter.ROLES.CUSTOMER
+    ) {
       const isEmergency = customerModule.checkEmergencyKeywords(fullEmailContent);
       const isEscalation = customerModule.checkEscalationKeywords(fullEmailContent);
 
-      const custRecord = customerModule.findCustomer(email.from_email) ||
-                         (contact?.id ? customerModule.findCustomer(contact.id) : null);
-
       let extracted = {};
       try {
-        extracted = await llama.extractCustomerIntake(fullEmailContent, custRecord || {});
+        extracted = await llama.extractCustomerIntake(fullEmailContent, person.customer_record || {});
       } catch (err) {
         log.warn('index', 'Failed to extract customer intake from email', { error: err.message });
       }
 
-      let currentCust = custRecord;
+      let currentCust = person.customer_record;
       if (!currentCust) {
         currentCust = customerModule.createOrUpdateCustomer({
           customer_name: email.from_name || extracted.customer_name || 'Homeowner',
@@ -1162,7 +1236,23 @@ async function handleNewEmail(email) {
         businessName,
         businessDescription
       });
+    } else {
+      const contactRole = contact?.relationship || 'acquaintance';
+      reply = await llama.generateEmailReply(
+        email.from_name, email.from_email, email.subject,
+        email.body?.substring(0, 1000),
+        contactRole, contact?.instructions,
+        ownerName, agentName,
+        businessName, businessDescription
+      );
     }
+
+    // Update multi-roles and active role in contacts memory
+    roleRouter.updatePersonRolesAndState({
+      person,
+      classification,
+      contactId: contact?.id
+    });
 
     if (shouldAutoReply) {
       await gmail.sendReply(email.from_email, email.subject, reply.text, reply.html);
