@@ -26,6 +26,7 @@ import * as emailRules from './email-rules.js';
 import * as calendarModule from './calendar.js';
 import * as subcontractorForm from './subcontractor-form.js';
 import * as doNotContact from './do-not-contact.js';
+import * as recruiter from './subcontractor-recruiter.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -663,9 +664,29 @@ async function handleSubcontractorApplication(email) {
     business_name: parsed.business_name
   });
 
+  // Record in Restoricon recruitment pipeline
+  const subLead = recruiter.createOrUpdateSubcontractorLead({
+    contact_id: contact.id,
+    company_name: parsed.business_name,
+    legal_name: parsed.business_name,
+    contact_name: parsed.principal_name || email.from_name,
+    phone: parsed.phone,
+    email: email.from_email,
+    primary_trade: parsed.trade,
+    license_number: parsed.license_number,
+    license_status: parsed.licensed ? 'LICENSE_VERIFIED' : (parsed.license_number ? 'LICENSE_PENDING_VERIFICATION' : null),
+    general_liability: parsed.gl_insurance,
+    workers_comp: parsed.wc_insurance,
+    crew_size: parsed.crew_size,
+    availability: parsed.weekly_capacity,
+    references: parsed.references,
+    lead_source: 'application_form'
+  });
+
   log.action('index', 'Subcontractor application received from ' + email.from_email, {
     business: parsed.business_name,
-    trade: parsed.trade_raw
+    trade: parsed.trade_raw,
+    subcontractorId: subLead?.subcontractor_id
   });
 
   try {
@@ -782,20 +803,63 @@ async function handleGoogleVoiceText(email) {
                           (contact?.reply_behavior !== 'review' && action === 'auto-reply');
 
   try {
-    const shouldDetectTone = config.behavior?.tone_matching !== false;
-    const detectedTone = shouldDetectTone ? await tone.detectTone(voiceMsg.body) : 'neutral';
-    const reply = await llama.generateSmsReply(
-      voiceMsg.sender_phone,
-      voiceMsg.sender_name,
-      voiceMsg.body,
-      detectedTone,
-      contact?.relationship,
-      contact?.instructions,
-      ownerName,
-      agentName,
-      businessName,
-      businessDescription
-    );
+    const subRecord = recruiter.findSubcontractor(voiceMsg.sender_phone) ||
+      (contact?.type === 'subcontractor' ? recruiter.findSubcontractor(contact.name || contact.business_name) : null);
+
+    let reply = '';
+    if (subRecord || contact?.type === 'subcontractor') {
+      // Subcontractor recruitment message handling
+      let extracted = {};
+      try {
+        extracted = await llama.extractRecruiterQualification(voiceMsg.body, subRecord || {});
+      } catch (err) {
+        log.warn('index', 'Failed to extract recruiter qualification details', { error: err.message });
+      }
+
+      let currentSub = subRecord;
+      if (!currentSub) {
+        currentSub = recruiter.createOrUpdateSubcontractorLead({
+          contact_id: contact?.id,
+          contact_name: voiceMsg.sender_name,
+          phone: voiceMsg.sender_phone,
+          company_name: extracted.company_name || voiceMsg.sender_name,
+          primary_trade: extracted.primary_trade || contact?.trade,
+          lead_source: 'incoming_sms',
+          ...extracted
+        });
+      } else if (Object.keys(extracted).length > 0) {
+        currentSub = recruiter.updateSubcontractor(currentSub.subcontractor_id, extracted);
+      }
+
+      reply = await llama.generateRecruiterReply({
+        channel: 'sms',
+        senderPhone: voiceMsg.sender_phone,
+        senderName: voiceMsg.sender_name,
+        message: voiceMsg.body,
+        subcontractor: currentSub,
+        agentName,
+        ownerName,
+        businessName,
+        businessDescription
+      });
+    } else {
+      const shouldDetectTone = config.behavior?.tone_matching !== false;
+      const detectedTone = shouldDetectTone ? await tone.detectTone(voiceMsg.body) : 'neutral';
+      const contactRole = contact?.relationship ||
+                          (contact?.type === 'business' ? 'business partner' : 'homeowner/customer');
+      reply = await llama.generateSmsReply(
+        voiceMsg.sender_phone,
+        voiceMsg.sender_name,
+        voiceMsg.body,
+        detectedTone,
+        contactRole,
+        contact?.instructions,
+        ownerName,
+        agentName,
+        businessName,
+        businessDescription
+      );
+    }
 
     if (shouldAutoReply) {
       await gmail.replyToGoogleVoiceText(voiceMsg, reply);
@@ -956,13 +1020,55 @@ async function handleNewEmail(email) {
                           (contact?.reply_behavior !== 'review' && action === 'auto-reply');
 
   try {
-    const reply = await llama.generateEmailReply(
-      email.from_name, email.from_email, email.subject,
-      email.body?.substring(0, 1000),
-      contact?.relationship, contact?.instructions,
-      ownerName, agentName,
-      businessName, businessDescription
-    );
+    const subRecord = recruiter.findSubcontractor(email.from_email) ||
+      (contact?.type === 'subcontractor' ? recruiter.findSubcontractor(contact.name || contact.business_name) : null);
+
+    let reply;
+    if (subRecord || contact?.type === 'subcontractor') {
+      let extracted = {};
+      try {
+        extracted = await llama.extractRecruiterQualification(email.body || '', subRecord || {});
+      } catch (err) {
+        log.warn('index', 'Failed to extract recruiter qualification from email', { error: err.message });
+      }
+
+      let currentSub = subRecord;
+      if (!currentSub) {
+        currentSub = recruiter.createOrUpdateSubcontractorLead({
+          contact_id: contact?.id,
+          contact_name: email.from_name,
+          email: email.from_email,
+          company_name: extracted.company_name || email.from_name,
+          primary_trade: extracted.primary_trade || contact?.trade,
+          lead_source: 'incoming_email',
+          ...extracted
+        });
+      } else if (Object.keys(extracted).length > 0) {
+        currentSub = recruiter.updateSubcontractor(currentSub.subcontractor_id, extracted);
+      }
+
+      reply = await llama.generateRecruiterReply({
+        channel: 'email',
+        senderEmail: email.from_email,
+        senderName: email.from_name,
+        message: email.body,
+        subcontractor: currentSub,
+        agentName,
+        ownerName,
+        businessName,
+        businessDescription
+      });
+    } else {
+      const contactRole = contact?.relationship ||
+                          (contact?.type === 'business' ? 'business partner' : 'homeowner/customer');
+      reply = await llama.generateEmailReply(
+        email.from_name, email.from_email, email.subject,
+        email.body?.substring(0, 1000),
+        contactRole, contact?.instructions,
+        ownerName, agentName,
+        businessName, businessDescription
+      );
+    }
 
     if (shouldAutoReply) {
       await gmail.sendReply(email.from_email, email.subject, reply.text, reply.html);

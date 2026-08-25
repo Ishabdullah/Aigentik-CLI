@@ -14,6 +14,7 @@ import path from 'path';
 import * as contactsSync from './contacts-sync.js';
 import { normalizeTrade } from './trades.js';
 import * as doNotContact from './do-not-contact.js';
+import * as recruiter from './subcontractor-recruiter.js';
 
 const PROFILE_FILE = path.join(config.paths.data_dir, 'profile.json');
 
@@ -272,6 +273,30 @@ async function handleOwnerCommand(sms) {
   // Show the do-not-contact list
   if (lower === 'blocked' || lower === 'do not contact list' || lower === 'dnc list' || lower === 'dnc') {
     reply(doNotContact.listDoNotContact());
+    return;
+  }
+
+  // Show subcontractor recruitment pipeline
+  if (lower === 'pipeline' || lower === 'subcontractor pipeline' || lower === 'subcontractor leads' || lower === 'subcontractors') {
+    reply(recruiter.formatPipelineReport());
+    return;
+  }
+
+  // Show pending subcontractor follow-ups
+  if (lower === 'subcontractor followups' || lower === 'sub followups' || lower === 'pending followups') {
+    reply(recruiter.formatFollowupList());
+    return;
+  }
+
+  // Subcontractor profile shorthand — "subcontractor [name/id]"
+  if (lower.startsWith('subcontractor ') && !lower.startsWith('subcontractor pipeline') && !lower.startsWith('subcontractor followups')) {
+    const target = text.substring(14).trim();
+    const sub = recruiter.findSubcontractor(target);
+    if (!sub) {
+      reply(`No subcontractor found matching "${target}".`);
+    } else {
+      reply(recruiter.formatSubcontractorSummary(sub));
+    }
     return;
   }
 
@@ -757,8 +782,25 @@ Return ONLY JSON.`;
         weekly_capacity: extracted.weekly_capacity
       });
 
+      // Also record in the recruiter pipeline
+      const sub = recruiter.createOrUpdateSubcontractorLead({
+        contact_id: contact.id,
+        company_name: extracted.business_name || targetName,
+        contact_name: targetName,
+        phone: extracted.phone || (contact.phones?.[0]),
+        email: extracted.email || (contact.emails?.[0]),
+        primary_trade: extracted.trade,
+        license_number: extracted.license_number,
+        license_status: extracted.licensed ? 'LICENSE_VERIFIED' : (extracted.license_number ? 'LICENSE_PENDING_VERIFICATION' : null),
+        general_liability: extracted.gl_insurance,
+        workers_comp: extracted.wc_insurance,
+        crew_size: extracted.crew_size,
+        availability: extracted.weekly_capacity,
+        lead_source: 'owner_command'
+      });
+
       const trade = normalizeTrade(extracted.trade);
-      reply(`✅ Added ${contact.name || targetName} as a subcontractor${trade ? ` (${extracted.trade})` : ''}.`);
+      reply(`✅ Added ${contact.name || targetName} as a subcontractor${trade ? ` (${extracted.trade})` : ''} [${sub.subcontractor_id}].`);
       log.action('owner-command', `add_subcontractor: ${targetName}`);
       break;
     }
@@ -1047,6 +1089,108 @@ Return ONLY JSON.`;
       }
       const list = matches.map(c => contacts.formatContact(c)).join('\n');
       await reply(`🛠️ ${matches.length} subcontractor(s) for "${tradeQuery}":\n${list}`);
+      break;
+    }
+
+    case 'list_subcontractor_pipeline': {
+      await reply(recruiter.formatPipelineReport());
+      break;
+    }
+
+    case 'show_subcontractor_profile': {
+      const target = cmd.target;
+      if (!target) { await reply("Which subcontractor? Give a name, trade, or ID."); break; }
+      const sub = recruiter.findSubcontractor(target);
+      if (!sub) {
+        await reply(`No subcontractor found matching "${target}".`);
+      } else {
+        await reply(recruiter.formatSubcontractorSummary(sub));
+      }
+      break;
+    }
+
+    case 'qualify_subcontractor': {
+      const target = cmd.target;
+      if (!target) { await reply("Which subcontractor do you want to qualify?"); break; }
+      const sub = recruiter.findSubcontractor(target);
+      if (!sub) {
+        await reply(`Subcontractor "${target}" not found.`);
+        break;
+      }
+      const updated = recruiter.updateSubcontractor(sub.subcontractor_id, {
+        qualification_status: recruiter.QUALIFICATION_STATUSES.QUALIFICATION_IN_PROGRESS
+      });
+      await reply(`🛠️ Qualification in progress for ${sub.company_name || sub.contact_name} [${sub.subcontractor_id}]. Next step: ${recruiter.determineNextRecruitmentStep(updated)}`);
+      break;
+    }
+
+    case 'approve_subcontractor': {
+      const target = cmd.target;
+      if (!target) { await reply("Which subcontractor do you want to approve?"); break; }
+      const sub = recruiter.findSubcontractor(target);
+      if (!sub) {
+        await reply(`Subcontractor "${target}" not found.`);
+        break;
+      }
+      recruiter.updateSubcontractor(sub.subcontractor_id, {
+        qualification_status: recruiter.QUALIFICATION_STATUSES.APPROVED_ONBOARDING
+      });
+      await reply(`✅ Approved onboarding for ${sub.company_name || sub.contact_name} [${sub.subcontractor_id}]. Status set to APPROVED_ONBOARDING.`);
+      log.action('owner-command', `approve_subcontractor: ${sub.subcontractor_id}`);
+      break;
+    }
+
+    case 'decline_subcontractor': {
+      const target = cmd.target;
+      if (!target) { await reply("Which subcontractor do you want to decline?"); break; }
+      const sub = recruiter.findSubcontractor(target);
+      if (!sub) {
+        await reply(`Subcontractor "${target}" not found.`);
+        break;
+      }
+      recruiter.updateSubcontractor(sub.subcontractor_id, {
+        qualification_status: recruiter.QUALIFICATION_STATUSES.DECLINED
+      });
+      await reply(`🛑 Marked ${sub.company_name || sub.contact_name} [${sub.subcontractor_id}] as DECLINED.`);
+      log.action('owner-command', `decline_subcontractor: ${sub.subcontractor_id}`);
+      break;
+    }
+
+    case 'request_subcontractor_docs': {
+      const target = cmd.target;
+      if (!target) { await reply("Which subcontractor needs document requests?"); break; }
+      const sub = recruiter.findSubcontractor(target);
+      if (!sub) {
+        await reply(`Subcontractor "${target}" not found.`);
+        break;
+      }
+      const missing = recruiter.getMissingDocuments(sub);
+      recruiter.updateSubcontractor(sub.subcontractor_id, {
+        qualification_status: recruiter.QUALIFICATION_STATUSES.DOCUMENTS_REQUESTED
+      });
+      await reply(`📄 Document request flagged for ${sub.company_name || sub.contact_name} [${sub.subcontractor_id}].\nMissing: ${missing.join(', ')}`);
+      break;
+    }
+
+    case 'list_subcontractor_missing_docs': {
+      const target = cmd.target;
+      if (!target) { await reply("Which subcontractor?"); break; }
+      const sub = recruiter.findSubcontractor(target);
+      if (!sub) {
+        await reply(`Subcontractor "${target}" not found.`);
+        break;
+      }
+      const missing = recruiter.getMissingDocuments(sub);
+      if (!missing.length) {
+        await reply(`✅ All documents received for ${sub.company_name || sub.contact_name} [${sub.subcontractor_id}].`);
+      } else {
+        await reply(`⚠️ Missing documents for ${sub.company_name || sub.contact_name} [${sub.subcontractor_id}]:\n• ${missing.join('\n• ')}`);
+      }
+      break;
+    }
+
+    case 'list_subcontractor_followups': {
+      await reply(recruiter.formatFollowupList());
       break;
     }
 

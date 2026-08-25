@@ -98,7 +98,7 @@ function checkRules(sms) {
     }
   }
 
-  const defaultAction = config.behavior?.default_unmatched_sms_action || 'review';
+  const defaultAction = config.behavior?.default_unmatched_sms_action || 'auto-reply';
   log.debug('sms-rules', `No rule matched for SMS from ${address} — defaulting to ${defaultAction}`);
   return { action: defaultAction, rule: null };
 }

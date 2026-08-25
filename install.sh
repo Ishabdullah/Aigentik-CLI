@@ -268,7 +268,7 @@ else
         pause_sms: false,
         require_confirmation_for_destructive: true,
         default_unmatched_action: 'auto-reply',
-        default_unmatched_sms_action: 'review',
+        default_unmatched_sms_action: 'auto-reply',
         tone_matching: true
       },
       paths: {

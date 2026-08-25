@@ -49,7 +49,7 @@ Every field in `config.json`, in full:
     "pause_sms": false,                          // true = stop auto-replying/queuing Google Voice texts specifically
     "require_confirmation_for_destructive": true,// documented intent; the confirmation flow itself is always on regardless
     "default_unmatched_action": "auto-reply",    // what to do with an EMAIL that matches no rule
-    "default_unmatched_sms_action": "review",    // what to do with a GOOGLE VOICE TEXT that matches no rule
+    "default_unmatched_sms_action": "auto-reply",// what to do with a GOOGLE VOICE TEXT that matches no rule
     "tone_matching": true                        // documented intent; tone detection always runs for SMS-shaped replies
   },
   "paths": {
