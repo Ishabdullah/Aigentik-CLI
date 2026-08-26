@@ -381,6 +381,48 @@ function formatOfferList(offers) {
   return offers.map((s, i) => `${i + 1}. ${new Date(s.start).toLocaleString()}`).join('\n');
 }
 
+// "Do you have anything later?" / "anything earlier" against a set of
+// already-offered slots — neither is a parseable date/time on its own
+// (chrono-node has nothing to anchor "later" to), so this has to be
+// recognized as its own case rather than falling through to "I didn't
+// catch a specific time in that."
+function detectRelativeTimeRequest(text) {
+  const lower = (text || '').toLowerCase();
+  if (/\b(later|push (it )?back|something after|anything after)\b/.test(lower)) return 'later';
+  if (/\b(earlier|sooner|move (it )?up|something before|anything before)\b/.test(lower)) return 'earlier';
+  return null;
+}
+
+// Bounded, same-day-only backward search for "anything earlier" — an
+// evening slot from the day before isn't a useful answer to "do you have
+// anything earlier [than what you just offered]", so this deliberately
+// doesn't cross into previous days. Returns up to `count` open slots
+// before `beforeDate` on its own calendar day, closest-to-beforeDate last.
+function findEarlierSlotsSameDay({ beforeDate, durationMinutes, count = 3, excludeId } = {}) {
+  const scheduleConfig = loadScheduleConfig();
+  const appointments = loadCalendar();
+  const duration = durationMinutes || scheduleConfig.default_duration_minutes;
+  const before = new Date(beforeDate);
+  const dayKey = DAY_KEYS[before.getDay()];
+  const dayHours = scheduleConfig.working_hours[dayKey];
+  if (!dayHours) return [];
+
+  const [sh, sm] = dayHours.start.split(':').map(Number);
+  const dayStart = new Date(before);
+  dayStart.setHours(sh, sm, 0, 0);
+
+  const found = [];
+  let slotStart = dayStart;
+  while (slotStart.getTime() + duration * 60 * 1000 <= before.getTime()) {
+    const slotEnd = new Date(slotStart.getTime() + duration * 60 * 1000);
+    if (isSlotAvailable(slotStart, slotEnd, scheduleConfig, appointments, excludeId)) {
+      found.push({ start: slotStart, end: slotEnd });
+    }
+    slotStart = new Date(slotStart.getTime() + 15 * 60 * 1000);
+  }
+  return found.slice(-count);
+}
+
 const ORDINAL_WORDS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'];
 
 // formatOfferList numbers its options 1/2/3 — a reply of bare "3", "option
@@ -473,6 +515,12 @@ function proposeAppointment({ title, contactId, attendeeName, attendeeEmail, cre
     rsvp_status: 'pending',
     pending_reschedule: null,
     offered_slots: offeredSlots.map(s => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() })),
+    // A time stated before every required field was collected (e.g. "I'm
+    // free Friday at noon" in the same message that's still missing an
+    // email) — set via setRequestedDatetime and honored once the intake is
+    // actually complete, instead of being silently forgotten in favor of
+    // generic offered slots. See processIntakeReply in index.js.
+    requested_datetime: null,
     created_via: createdVia || 'owner',
     notes: null,
     created_at: new Date().toISOString(),
@@ -518,6 +566,18 @@ function setAppointmentNotes(id, notes) {
   if (idx === -1) return null;
 
   appointments[idx].notes = notes;
+  appointments[idx].updated_at = new Date().toISOString();
+
+  saveCalendar(appointments);
+  return appointments[idx];
+}
+
+function setRequestedDatetime(id, isoString) {
+  const appointments = loadCalendar();
+  const idx = appointments.findIndex(a => a.id === id);
+  if (idx === -1) return null;
+
+  appointments[idx].requested_datetime = isoString;
   appointments[idx].updated_at = new Date().toISOString();
 
   saveCalendar(appointments);
@@ -749,12 +809,15 @@ export {
   generateOfferSlots,
   formatOfferList,
   matchOfferedSlotSelection,
+  detectRelativeTimeRequest,
+  findEarlierSlotsSameDay,
   detectAppointmentTypeFromText,
   createAppointment,
   proposeAppointment,
   setAppointmentType,
   markFormSent,
   setAppointmentNotes,
+  setRequestedDatetime,
   updateNegotiationOffers,
   confirmNegotiation,
   findNegotiationsByContact,

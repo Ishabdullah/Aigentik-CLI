@@ -338,6 +338,15 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
   const detectedType = negotiation.appointment_type ? null : calendarModule.detectAppointmentTypeFromText(text);
   if (detectedType) negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
 
+  // A preferred time stated in the same breath as still-missing info ("I'm
+  // free Friday at noon" while email hasn't been given yet) used to be
+  // silently dropped — the missing-fields branch below returns before ever
+  // checking for a date/time in this message. Parse it once, up front, and
+  // remember it on the negotiation so it's honored once intake is actually
+  // complete instead of being forgotten in favor of generic offered slots.
+  const statedDate = calendarModule.parseDatetimePhrase(text);
+  if (statedDate) negotiation = calendarModule.setRequestedDatetime(negotiation.id, statedDate.toISOString()) || negotiation;
+
   let extracted = {};
   try {
     extracted = await llama.extractContactDetails(text, ['name', 'email', 'phone', 'address', 'concerns']);
@@ -365,7 +374,7 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
     // repeating the outstanding ask.
     const contributedNothing = !detectedType &&
       !Object.values(extracted || {}).some(v => v) &&
-      !calendarModule.parseDatetimePhrase(text);
+      !statedDate;
 
     if (contributedNothing) {
       let answer = '';
@@ -396,14 +405,22 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
       return true;
     }
 
-    await reply(`Thanks! ${ask}`);
+    // Acknowledge a captured time preference by name instead of silently
+    // banking it — a real secretary repeats back what they heard rather
+    // than leaving the caller to wonder if it registered at all.
+    const timeAck = statedDate ? `Got it, noting ${statedDate.toLocaleString()} as your preference. ` : '';
+    await reply(`Thanks! ${timeAck}${ask}`);
     return true;
   }
 
   const attendeeEmail = channel === 'email' ? target : (freshContact?.emails?.[0] || null);
   const duration = calendarModule.getDurationForRelationship(freshContact?.relationship);
   const afterDate = calendarModule.mentionsToday(text) ? undefined : calendarModule.startOfTomorrow();
-  const requestedDate = calendarModule.parseDatetimePhrase(text);
+  // Prefer a date/time stated in this exact message; failing that, honor
+  // whatever preference was captured earlier in the conversation
+  // (requested_datetime — see the comment where it's set above) instead of
+  // forgetting it was ever said and defaulting straight to generic offers.
+  const requestedDate = statedDate || (negotiation.requested_datetime ? new Date(negotiation.requested_datetime) : null);
   const typeLabel = negotiation.appointment_type === 'in_person' ? 'in-person appointment' : 'phone call';
 
   if (!requestedDate) {
@@ -448,6 +465,38 @@ async function negotiateTime({ negotiation, text, adminEmail, senderLabel, reply
     const chosen = negotiation.offered_slots[selectedIndex];
     const slot = { start: new Date(chosen.start), end: new Date(chosen.end) };
     await confirmAndClose({ negotiation, slot, attendeeEmail: negotiation.attendee_email, adminEmail, senderLabel, reply });
+    return true;
+  }
+
+  // "Do you have anything later/earlier?" isn't a parseable date/time on
+  // its own — chrono-node has nothing to anchor "later" to — so it has to
+  // be recognized as its own case, not left to fall through to "I didn't
+  // catch a specific time in that" (which just re-shows the same options
+  // and stalls the conversation instead of actually answering).
+  const relative = calendarModule.detectRelativeTimeRequest(text);
+  if (relative === 'later') {
+    const lastOffered = negotiation.offered_slots[negotiation.offered_slots.length - 1];
+    const duration = (new Date(lastOffered.end) - new Date(lastOffered.start)) / 60000;
+    const afterDate = new Date(new Date(lastOffered.end).getTime() + 15 * 60 * 1000);
+    const offers = calendarModule.generateOfferSlots({ durationMinutes: duration, afterDate, count: 3 });
+    if (offers.length === 0) {
+      await reply("I don't have anything later than that open right now — would an earlier time work instead, or should I have my owner follow up?");
+      return true;
+    }
+    calendarModule.updateNegotiationOffers(negotiation.id, offers);
+    await reply(`Sure, here's what I have later:\n${calendarModule.formatOfferList(offers)}\n\nWhich works, or another time?`);
+    return true;
+  }
+  if (relative === 'earlier') {
+    const firstOffered = negotiation.offered_slots[0];
+    const duration = (new Date(firstOffered.end) - new Date(firstOffered.start)) / 60000;
+    const offers = calendarModule.findEarlierSlotsSameDay({ beforeDate: firstOffered.start, durationMinutes: duration, count: 3 });
+    if (offers.length === 0) {
+      await reply("I don't have anything earlier that same day — would a different day work, or should I have my owner follow up?");
+      return true;
+    }
+    calendarModule.updateNegotiationOffers(negotiation.id, offers);
+    await reply(`Sure, here's what I have earlier that day:\n${calendarModule.formatOfferList(offers)}\n\nWhich works, or another time?`);
     return true;
   }
 
