@@ -121,6 +121,23 @@ describe('EmailProvider', () => {
       expect(parsed.sender_name).toBe('Jane');
       expect(parsed.sender_phone).toBe('5559876543');
     });
+
+    // Google Voice's current forwarded-text template appends a YOUR ACCOUNT /
+    // HELP CENTER / HELP FORUM nav block plus boilerplate ending in Google's
+    // own corporate mailing address — confirmed live to have been fed
+    // straight into an LLM extraction call and picked up as if it were the
+    // customer's own address, since nothing stripped it beforehand.
+    it('strips the current YOUR ACCOUNT / HELP CENTER footer, not just the older one', () => {
+      const email = {
+        subject: 'New text message from John Doe (555) 123-4567',
+        body: "I'd like to schedule a call for Friday at noon\nYOUR ACCOUNT  HELP CENTER\n HELP FORUM\n\nThis email was sent to you because you indicated that you'd like to receive text messages sent to your Google Voice number via email.\n\n© 2026 Google LLC 1600 Amphitheatre Parkway, Mountain View, CA 94043",
+        from_email: 'voice-noreply@google.com'
+      };
+
+      const parsed = provider.parseGoogleVoiceEmail(email);
+      expect(parsed.body).toBe("I'd like to schedule a call for Friday at noon");
+      expect(parsed.body).not.toContain('Amphitheatre');
+    });
   });
 
   describe('Calendar response detection', () => {

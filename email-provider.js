@@ -743,7 +743,21 @@ class EmailProvider {
     }
 
     let body = email.body || '';
-    const footerIdx = body.indexOf('To respond to this text message');
+    // Google Voice's forwarded-text template has changed over time, and this
+    // account is on a newer one than "To respond to this text message" (kept
+    // for older/other accounts still on it) — its current footer is a
+    // YOUR ACCOUNT / HELP CENTER / HELP FORUM nav block followed by boilerplate
+    // that ends with Google's own corporate mailing address. Verified live:
+    // leaving this in `body` fed it straight into every downstream LLM call
+    // as if it were part of the actual message, and an extraction call picked
+    // up Google's address as if it were the customer's — not a hallucination,
+    // it was genuinely sitting right there in the "message" text.
+    const footerMarkers = ['To respond to this text message', 'YOUR ACCOUNT'];
+    let footerIdx = -1;
+    for (const marker of footerMarkers) {
+      const idx = body.indexOf(marker);
+      if (idx !== -1 && (footerIdx === -1 || idx < footerIdx)) footerIdx = idx;
+    }
     if (footerIdx !== -1) {
       body = body.substring(0, footerIdx).trim();
     }
