@@ -629,6 +629,18 @@ async function handleSchedulingMessage({ text, contact, channel, target, subject
   if (!classified || classified.intent === 'none') return false;
 
   if (classified.intent === 'request_appointment') {
+    // A price/estimate question ("how much are bathroom remodels usually?")
+    // reads as wanting an appointment even from someone who already has one
+    // confirmed — classifySchedulingIntent has no way to know that. Rather
+    // than propose a redundant second appointment, let this fall through to
+    // the normal reply flow, which can just answer the question (and, once
+    // it has appointment context — see generateCustomerReply/generateSmsReply/
+    // generateEmailReply — can reference the existing booking naturally).
+    const existingAppt = contact?.id ? calendarModule.findUpcomingAppointmentForContact(contact.id) : null;
+    if (existingAppt) {
+      log.info('index', `Skipping duplicate appointment proposal for ${senderLabel} — already has ${existingAppt.id} confirmed`);
+      return false;
+    }
     const negotiation = calendarModule.proposeAppointment({
       title: `Appointment with ${contact?.name || senderLabel}`,
       contactId: contact?.id,
@@ -812,6 +824,14 @@ async function handleGoogleVoiceText(email) {
                           (contact?.reply_behavior !== 'review' && action === 'auto-reply');
 
   try {
+    // Computed once and threaded into whichever reply generator ends up
+    // running below, so an already-confirmed appointment can be mentioned
+    // naturally when relevant instead of being invisible to the reply (or,
+    // via the duplicate-booking guard in handleSchedulingMessage above,
+    // getting silently re-proposed).
+    const upcomingAppt = contact?.id ? calendarModule.findUpcomingAppointmentForContact(contact.id) : null;
+    const appointmentContext = upcomingAppt ? calendarModule.formatAppointment(upcomingAppt) : null;
+
     const person = roleRouter.resolvePersonAndRoles({
       phone: voiceMsg.sender_phone,
       name: voiceMsg.sender_name
@@ -927,7 +947,8 @@ async function handleGoogleVoiceText(email) {
         agentName,
         ownerName,
         businessName,
-        businessDescription
+        businessDescription,
+        appointmentContext
       });
     } else {
       const shouldDetectTone = config.behavior?.tone_matching !== false;
@@ -943,7 +964,8 @@ async function handleGoogleVoiceText(email) {
         ownerName,
         agentName,
         businessName,
-        businessDescription
+        businessDescription,
+        appointmentContext
       );
     }
 
@@ -1114,6 +1136,10 @@ async function handleNewEmail(email) {
 
   try {
     const fullEmailContent = `${email.subject || ''}\n\n${email.body || ''}`;
+    // See the matching comment in handleGoogleVoiceText — same reasoning.
+    const upcomingApptEmail = contact?.id ? calendarModule.findUpcomingAppointmentForContact(contact.id) : null;
+    const appointmentContext = upcomingApptEmail ? calendarModule.formatAppointment(upcomingApptEmail) : null;
+
     const person = roleRouter.resolvePersonAndRoles({
       email: email.from_email,
       name: email.from_name
@@ -1234,7 +1260,8 @@ async function handleNewEmail(email) {
         agentName,
         ownerName,
         businessName,
-        businessDescription
+        businessDescription,
+        appointmentContext
       });
     } else {
       const contactRole = contact?.relationship || 'acquaintance';
@@ -1243,7 +1270,8 @@ async function handleNewEmail(email) {
         email.body?.substring(0, 1000),
         contactRole, contact?.instructions,
         ownerName, agentName,
-        businessName, businessDescription
+        businessName, businessDescription,
+        appointmentContext
       );
     }
 

@@ -258,7 +258,7 @@ function extractJson(raw) {
   return JSON.parse(match[0]);
 }
 
-async function generateEmailReply(senderName, senderEmail, subject, body, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription) {
+async function generateEmailReply(senderName, senderEmail, subject, body, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription, appointmentContext = null) {
   const agent = agentName || config.aigentik_name || 'Aigentik';
   const owner = ownerName || 'my owner';
   // Once a business is set, the signature identifies the agent as that
@@ -285,6 +285,7 @@ async function generateEmailReply(senderName, senderEmail, subject, body, relati
     'If the sender is a homeowner or customer, be helpful and attentive to their remodeling, renovation, or home service needs. ' +
     'If the sender is a subcontractor or tradesperson, communicate professionally regarding trade work, services, or scheduling while avoiding unauthorized commitments. ' +
     (instructionText ? instructionText + '. ' : '') +
+    (appointmentContext ? 'This contact already has an appointment on file: ' + appointmentContext + '. Only mention it if it is actually relevant to what they just asked (e.g. they ask about scheduling, or ask something the appointment already answers) — do not force it in, and never propose or offer to book a new/different appointment yourself. ' : '') +
     'Do NOT add a signature — it will be added automatically. ' +
     'Reply with email body text only.';
 
@@ -303,7 +304,7 @@ async function generateEmailReply(senderName, senderEmail, subject, body, relati
   };
 }
 
-async function generateSmsReply(senderNumber, senderName, message, tone, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription) {
+async function generateSmsReply(senderNumber, senderName, message, tone, relationship, contactInstructions, ownerName, agentName, businessName, businessDescription, appointmentContext = null) {
   const agent = agentName || config.aigentik_name || 'Aigentik';
   const owner = ownerName || 'my owner';
   const signature = businessName
@@ -326,6 +327,7 @@ async function generateSmsReply(senderNumber, senderName, message, tone, relatio
     'If the sender is a homeowner or customer, be helpful and attentive to their remodeling, renovation, or home service needs. ' +
     'If the sender is a subcontractor or tradesperson, communicate professionally regarding trade work, services, or scheduling while avoiding unauthorized commitments. ' +
     (instructionText ? instructionText + '. ' : '') +
+    (appointmentContext ? 'This contact already has an appointment on file: ' + appointmentContext + '. Only mention it if it is actually relevant to what they just asked (e.g. they ask about scheduling, or ask something the appointment already answers) — do not force it in, and never propose or offer to book a new/different appointment yourself. ' : '') +
     'Keep it concise — this is a text message. ' +
     'Do NOT add the signature — it will be added automatically. ' +
     'Reply with message text only, nothing else.';
@@ -573,7 +575,8 @@ async function generateCustomerReply({
   agentName,
   ownerName,
   businessName,
-  businessDescription
+  businessDescription,
+  appointmentContext = null
 }) {
   const agent = agentName || config.aigentik_name || 'Aigentik';
   const owner = ownerName || 'the Restoricon management team';
@@ -583,7 +586,8 @@ async function generateCustomerReply({
     customer,
     channel,
     agentName: agent,
-    ownerName: owner
+    ownerName: owner,
+    appointmentContext
   });
 
   const senderDisplay = senderName || senderPhone || senderEmail || 'Customer';

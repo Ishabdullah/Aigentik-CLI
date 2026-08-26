@@ -610,6 +610,18 @@ function findAppointmentsByContact(contactId) {
   return loadCalendar().filter(a => a.contact_id === contactId && a.status === 'confirmed');
 }
 
+// The soonest confirmed appointment for this contact that hasn't happened
+// yet — used to (a) stop a fresh estimate/price question from proposing a
+// duplicate booking when one's already confirmed, and (b) let reply
+// generation mention it naturally instead of acting like it doesn't exist.
+function findUpcomingAppointmentForContact(contactId) {
+  if (!contactId) return null;
+  const now = new Date();
+  return findAppointmentsByContact(contactId)
+    .filter(a => new Date(a.start) >= now)
+    .sort((a, b) => new Date(a.start) - new Date(b.start))[0] || null;
+}
+
 // Most relevant appointment for a given attendee email — used to match an
 // incoming calendar-response email (accept/decline) back to the booking it's
 // about. Prefers the soonest upcoming one still awaiting a response.
@@ -712,6 +724,7 @@ export {
   cancelAppointment,
   getAppointment,
   findAppointmentsByContact,
+  findUpcomingAppointmentForContact,
   findAppointmentByAttendeeEmail,
   setRsvpStatus,
   findUpcoming,

@@ -636,7 +636,8 @@ export function buildCustomerSystemPrompt({
   customer = null,
   channel = 'sms',
   agentName = 'Aigentik',
-  ownerName = 'the Restoricon management team'
+  ownerName = 'the Restoricon management team',
+  appointmentContext = null
 } = {}) {
   const isEmergency = customer?.escalation_status === 'EMERGENCY_REVIEW';
   const customerName = customer?.customer_name || 'the homeowner';
@@ -680,8 +681,9 @@ If the customer mentions active flooding, water gushing, structural collapse haz
 - Known Address: ${customer?.property_address || 'Not provided yet'}
 - Urgency: ${customer?.project_urgency || 'Standard'}
 - Emergency Flag: ${isEmergency ? 'YES (EMERGENCY IN PROGRESS)' : 'NO'}
+- Existing Appointment: ${appointmentContext || 'None on file'}
 
-Respond professionally as ${agentName} for Restoricon. Advance the qualification, answer customer questions using approved information, and guide them to the proper next step.`;
+Respond professionally as ${agentName} for Restoricon. Advance the qualification, answer customer questions using approved information, and guide them to the proper next step. If an appointment is already on file, only bring it up when actually relevant to what the customer just asked — never propose or offer a new/different appointment yourself; that's handled by a separate scheduling flow.`;
 }
 
 // --- Customer Summaries & Pipeline Reports ---
