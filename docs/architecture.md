@@ -13,6 +13,7 @@ How Aigentik is put together: the process model, the two channels everything flo
 - [Who Aigentik listens to as "the owner"](#who-aigentik-listens-to-as-the-owner)
 - [What happens to an incoming email, step by step](#what-happens-to-an-incoming-email-step-by-step)
 - [What happens to an incoming Google Voice text, step by step](#what-happens-to-an-incoming-google-voice-text-step-by-step)
+- [Dynamic role & workflow routing](#dynamic-role--workflow-routing)
 - [Source file reference](#source-file-reference)
 
 ## How it's built
@@ -113,6 +114,17 @@ For the email path specifically: if you reply to one of Aigentik's own notificat
 6a. **Scheduling and role/workflow classification**, same as email (steps 5a–6 above) — a fresh appointment request from a known subcontractor is skipped in favor of the subcontractor flow, an in-flight negotiation always wins, and otherwise `role-router.js` decides between the subcontractor, customer, or plain-reply path (`generateSmsReply` — shorter and more casual than the email version, with its own signature — for anything that isn't one of those).
 7. **Auto-reply or queue**, same shape as email: either `gmail.replyToGoogleVoiceText` sends it immediately (which Google Voice turns back into a real SMS), or it's queued with the forwarding email's address and subject saved alongside it, so a later manual approval can still reply correctly.
 
+## Dynamic role & workflow routing
+
+Step 6/6a above (email/SMS) is `role-router.js` deciding *which* conversation this message belongs to. It runs in two calls:
+
+1. **`resolvePersonAndRoles`** builds a `person`: the matching contact record (if any), the linked subcontractor/customer CRM record (`subcontractor-recruiter.js`'s `findSubcontractor` / `customer-module.js`'s `findCustomer`), the accumulated `roles` array, and an `active_role`. A contact with no CRM record and no `roles` yet defaults to `CUSTOMER` rather than `OTHER` — an unknown sender is assumed to be a prospective homeowner until something says otherwise.
+2. **`detectRoleAndIntent`** classifies the message itself against that person, checked in order: an opt-out/DNC phrase short-circuits to `do-not-contact.js` immediately; an emergency keyword forces the customer workflow regardless of the sender's known role; a message that reads as both a customer project and a subcontractor pitch in the same breath is flagged `DUAL_INTENT_CUSTOMER_AND_SUB`; a handful of regex patterns catch genuinely ambiguous phrasing ("I do roofing and need some information") and return `AMBIGUOUS_CLARIFICATION` instead of guessing; failing all of those, a subcontractor-language or customer-language pattern match decides it deterministically; and only a message that matches none of the above falls through to an LLM classification call (`classifyWithLLM`) for a plain-language verdict.
+
+The result decides which module handles the reply — [`subcontractor-recruiter.js`](subcontractor-recruitment.md) for `SUBCONTRACTOR_RECRUITMENT`/`SUBCONTRACTOR_ACTIVE`, [`customer-module.js`](customer-crm.md) for `CUSTOMER_INTAKE_SALES`/`CUSTOMER_SUPPORT`, an ambiguity-clarification reply asking which one applies, or a plain AI reply for anything else — and `updatePersonRolesAndState` then folds any newly detected role into the contact's `roles`/`active_role` fields (see [The contact directory](contacts.md)) without touching `type`, since role membership and contact `type` are tracked separately on purpose (a subcontractor who also becomes a customer shouldn't disappear from `findSubcontractorsByTrade` results).
+
+A sender already routed to `owner-command.js` (an admin text/email — see above) never reaches role-router at all; there's no admin-detection branch here to bypass.
+
 ## Source file reference
 
 | File | Role |
@@ -128,8 +140,8 @@ For the email path specifically: if you reply to one of Aigentik's own notificat
 | `contacts.js` | The contact directory: lookup, create, update, history, per-contact instructions, subcontractor trade/license/insurance fields and lookup-by-trade, plus the accumulating `roles`/`active_role` fields `role-router.js` maintains |
 | `contacts-sync.js` | One-way merge of Android's real contact list into `contacts.json` |
 | `role-router.js` | Resolves an inbound sender into a `person` (identity, known CRM records, accumulated roles) and classifies each message's role/intent/workflow — deterministic pattern matching first, an LLM call as fallback — deciding whether it routes to the subcontractor flow, the customer flow, an ambiguity-clarification reply, or a plain AI reply |
-| `subcontractor-recruiter.js` | The subcontractor CRM: lead creation/lookup and qualification-detail extraction for the recruitment conversation flow |
-| `customer-module.js` | The customer CRM: intake/sales-qualification record creation/lookup, and emergency/escalation keyword detection |
+| `subcontractor-recruiter.js` | The subcontractor CRM — see [Subcontractor recruitment pipeline](subcontractor-recruitment.md): lead creation/lookup, qualification-status/next-step state machines, and qualification-detail extraction for the recruitment conversation flow |
+| `customer-module.js` | The customer CRM — see [Customer intake, sales & support CRM](customer-crm.md): intake/sales-qualification record creation/lookup, lead scoring, and emergency/escalation keyword detection |
 | `subcontractor-form.js` | Detects and deterministically parses "Subcontractor Application" lead-form emails into trade/license/insurance/crew/references |
 | `trades.js` | Canonical trade taxonomy and synonym normalization (e.g. "electrician" → `electrical`), shared by `contacts.js` and `subcontractor-form.js` |
 | `queue.js` | The review queue: add, fetch, edit, remove, format for display |
