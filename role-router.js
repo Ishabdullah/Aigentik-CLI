@@ -345,7 +345,8 @@ Context:
 Rules:
 1. A PERSON is not a static role. A customer asking to do sub work switches to SUBCONTRACTOR. A sub asking for work on their home switches to CUSTOMER.
 2. If ambiguous, set needs_clarification=true and provide a polite clarification question asking if this is for their own property or trade subcontracting.
-3. Return JSON only: ${schema}`;
+3. detected_role="OTHER" and workflow="GENERAL_INQUIRY" mean "this message gives no signal either way" — reserve them for messages truly unrelated to home-improvement services or subcontractor work (small talk, a wrong-number-style message, etc). If the Active Role above is already CUSTOMER or SUBCONTRACTOR and this message is a plain on-topic follow-up in that same conversation (a question about services, pricing, scope, timeline, or anything else a customer/subcontractor would naturally ask next) with no clear signal of switching roles, keep detected_role as that same Active Role and pick CUSTOMER_INTAKE_SALES/CUSTOMER_SUPPORT (or SUBCONTRACTOR_RECRUITMENT/SUBCONTRACTOR_ACTIVE) accordingly — do not fall back to OTHER/GENERAL_INQUIRY just because the message doesn't independently prove the role on its own.
+4. Return JSON only: ${schema}`;
 
   const messages = [
     { role: 'system', content: systemMsg },
@@ -428,7 +429,15 @@ export function updatePersonRolesAndState({
   }
 
   const updatedRoles = Array.from(existingRoles);
-  const activeRole = classification.detected_role || person.active_role;
+  // OTHER means "no clear signal either way," not "this person's role is
+  // now OTHER" — letting it overwrite an established active_role is what
+  // let one ambiguous test message ("hello, are you there?") permanently
+  // knock a real customer's active_role to OTHER, which then kept biasing
+  // every later classification away from CUSTOMER even for on-topic
+  // follow-ups (see classifyWithLLM's context block below).
+  const activeRole = (classification.detected_role && classification.detected_role !== ROLES.OTHER)
+    ? classification.detected_role
+    : person.active_role;
 
   // Persist to contacts.json. `roles`/`active_role` are the source of truth
   // for role membership — `type` is left untouched here, since things like
