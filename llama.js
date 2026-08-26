@@ -479,7 +479,7 @@ function isAddressGrounded(address, sourceText) {
 
 async function extractContactDetails(text, fields) {
   const schema = '{' + fields.map(f => `"${f}":"string|null"`).join(',') + '}';
-  const systemMsg = `Extract the following contact details if mentioned in this message: ${fields.join(', ')}. Return ONLY valid JSON: ${schema}. Use null for anything not mentioned. "address" means a home/mailing address.`;
+  const systemMsg = `Extract the following contact details if mentioned in this message: ${fields.join(', ')}. Return ONLY valid JSON: ${schema}. Use null for anything not mentioned. "address" means a home/mailing address. Be sure to extract email addresses precisely as provided by the user (even if it's just the email address itself).`;
   const messages = [
     { role: 'system', content: systemMsg },
     { role: 'user', content: `Message: "${text}"` }

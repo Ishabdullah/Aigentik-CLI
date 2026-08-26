@@ -110,7 +110,7 @@ class EmailProvider {
           minVersion: 'TLSv1.2'
         },
         // Prevent header injection
-        disableFileAccess: true,
+        disableFileAccess: false,
         disableUrlAccess: true,
         // Connection pool
         pool: true,

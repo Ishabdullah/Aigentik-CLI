@@ -596,7 +596,7 @@ function detectAppointmentTypeFromText(text) {
   // for it explicitly and let an explicit call mention win.
   const negatesVisit = /\b(no need|don'?t need|not necessary|no reason)\b[^.!?]{0,40}\b(come|visit|stop by|in[\s-]?person)\b/.test(lower);
   if (negatesVisit && matchesCall) return 'call';
-  if (/\b(in[\s-]?person|come (over|by|out|check|take a look|look at)|someone (come|stop by)|stop by|at (my|your|the) (home|house|office|place)|visit|on[\s-]?site|drop by)\b/.test(lower)) return 'in_person';
+  if (/\b(in[\s-]?person|come (over|by|out|check|take a look|look at)|someone (come|stop by|here|out)|(send|need) someone (here|out)|someone (to )?(come|look|take|check)|stop by|at (my|your|the) (home|house|office|place)|visit|on[\s-]?site|drop by)\b/.test(lower)) return 'in_person';
   if (matchesCall) return 'call';
   return null;
 }

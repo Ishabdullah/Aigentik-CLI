@@ -84,6 +84,7 @@ const CUSTOMER_PATTERNS = [
   /\b(my house|my home|my kitchen|my bathroom|my basement|my roof|my property|my living room|my ceiling|own bathroom|own house|own home|own kitchen)\b/i,
   /\b(need (an estimate|a quote|a consultation|work done|someone to fix|remodeling|restoration|repair))\b/i,
   /\b(how much (would it cost|does it cost|do you charge for|is the cost to))\s+([a-z\s]+)?(remodel|renovate|fix|roof|paint|replace)\b/i,
+  /\b(how much (does|would|is|are)\s+([a-z\s]+)?\s*(cost|pricing|rate|rates|estimate))\b/i,
   /\b(water damage|leak in|flooding in|mold in|ceiling collapsing|storm damage|fire damage)\b/i,
   /\b(remodel|remodeling|renovation|renovating|finish(ing)? (my|the) basement)\b/i,
   /\b(hire you|hire restoricon) to (remodel|renovate|fix|repair|paint|build|install)\b/i,

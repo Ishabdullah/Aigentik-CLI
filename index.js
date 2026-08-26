@@ -257,10 +257,14 @@ async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, s
   if (attendeeEmail) await gmail.sendCalendarInvite(appt, attendeeEmail);
   await gmail.sendCalendarInvite(appt, adminEmail,
     `📅 New appointment booked: ${appt.title} at ${new Date(appt.start).toLocaleString()}.\n\n${details}`);
+  
+  const customerSummaryText = `\n\nHere is the information I have saved for you:\n${details}\n\nPlease let me know if any of this is incorrect or needs updating!`;
+
   await reply(
     `You're all set! ${typeLabel} on ${new Date(appt.start).toLocaleString()}.` +
     (attendeeEmail ? inviteSentNote() : '') +
-    closingReassurance(appt.appointment_type)
+    closingReassurance(appt.appointment_type) + 
+    customerSummaryText
   );
   await gmail.sendOwnerNotification(
     `📅 Appointment confirmed with ${appt.attendee_name || senderLabel} (${typeLabel}): ${new Date(appt.start).toLocaleString()}\n\n${details}`
@@ -676,6 +680,14 @@ async function handleCancelRequest({ classified, contact, reply, adminEmail, sen
 // email mechanism, no calendar API/OAuth involved. Returns true if handled
 // (caller should skip its normal auto-reply/queue flow), false otherwise.
 async function handleSchedulingMessage({ text, contact, channel, target, subject, voiceMsg, senderLabel }) {
+  // An active emergency or escalation keyword must always route to the
+  // emergency/escalation customer protocol, never standard calendar negotiation.
+  const isEmergency = customerModule.checkEmergencyKeywords(text);
+  const isEscalation = customerModule.checkEscalationKeywords(text);
+  if (isEmergency || isEscalation) {
+    return false;
+  }
+
   const reply = async (msg) => {
     if (channel === 'email') await gmail.sendReply(target, subject, msg);
     else await gmail.replyToGoogleVoiceText(voiceMsg, msg);
@@ -933,7 +945,7 @@ async function handleGoogleVoiceText(email) {
       channel: 'sms'
     });
 
-    log.info('index', `Role classification for ${voiceMsg.sender_phone}: Role=${classification.detected_role}, Intent=${classification.detected_intent}, Workflow=${classification.workflow}`);
+    log.info('index', `Role classification for ${voiceMsg.sender_phone}: Role=${classification.detected_role}, Intent=${classification.current_intent}, Workflow=${classification.workflow}`);
 
     let reply = '';
 
@@ -986,6 +998,7 @@ async function handleGoogleVoiceText(email) {
     ) {
       const isEmergency = customerModule.checkEmergencyKeywords(voiceMsg.body);
       const isEscalation = customerModule.checkEscalationKeywords(voiceMsg.body);
+      const isSwearing = customerModule.checkSwearing(voiceMsg.body);
 
       let extracted = {};
       try {
@@ -999,36 +1012,53 @@ async function handleGoogleVoiceText(email) {
         currentCust = customerModule.createOrUpdateCustomer({
           customer_name: voiceMsg.sender_name || extracted.customer_name || 'Homeowner',
           phone: voiceMsg.sender_phone,
-          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : null),
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : ((isEscalation || isSwearing) ? 'HUMAN_REVIEW_REQUIRED' : null),
           ...extracted
         });
       } else {
         currentCust = customerModule.updateCustomer(currentCust.customer_id, {
-          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : currentCust.escalation_status),
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : ((isEscalation || isSwearing) ? 'HUMAN_REVIEW_REQUIRED' : currentCust.escalation_status),
           ...extracted
         });
       }
 
-      if (isEmergency) {
+      if (isSwearing) {
         const handoff = customerModule.formatHandoffSummary({
           customer: currentCust,
-          issue: '🚨 ACTIVE EMERGENCY DETECTED (Water/Fire/Safety/Structural)',
-          urgency: 'Immediate',
-          whatCustomerWants: 'Immediate emergency response / stabilization',
-          nextAction: 'Call customer immediately and dispatch emergency mitigation team'
-        });
-        await gmail.sendOwnerNotification(handoff);
-      } else if (isEscalation) {
-        const handoff = customerModule.formatHandoffSummary({
-          customer: currentCust,
-          issue: '⚠️ HUMAN REVIEW / ESCALATION REQUESTED',
+          issue: '⚠️ UNPROFESSIONAL CONDUCT / SWEARING DETECTED',
           urgency: 'High',
-          whatCustomerWants: extracted.escalation_reason || 'Speak with Restoricon manager/owner'
+          whatCustomerWants: 'Customer expressed frustration/anger'
         });
         await gmail.sendOwnerNotification(handoff);
-      }
+        
+        reply = "I understand you're frustrated, but please maintain a professional tone. I am escalating this to a live representative who will contact you as soon as they are available.";
+        
+        doNotContact.addToDoNotContact({ 
+          identifier: voiceMsg.sender_phone, 
+          name: voiceMsg.sender_name || currentCust.customer_name, 
+          reason: 'Swearing / Escalated to Admin' 
+        });
+      } else {
+        if (isEmergency) {
+          const handoff = customerModule.formatHandoffSummary({
+            customer: currentCust,
+            issue: '🚨 ACTIVE EMERGENCY DETECTED (Water/Fire/Safety/Structural)',
+            urgency: 'Immediate',
+            whatCustomerWants: 'Immediate emergency response / stabilization',
+            nextAction: 'Call customer immediately and dispatch emergency mitigation team'
+          });
+          await gmail.sendOwnerNotification(handoff);
+        } else if (isEscalation) {
+          const handoff = customerModule.formatHandoffSummary({
+            customer: currentCust,
+            issue: '⚠️ HUMAN REVIEW / ESCALATION REQUESTED',
+            urgency: 'High',
+            whatCustomerWants: extracted.escalation_reason || 'Speak with Restoricon manager/owner'
+          });
+          await gmail.sendOwnerNotification(handoff);
+        }
 
-      reply = await llama.generateCustomerReply({
+        reply = await llama.generateCustomerReply({
         channel: 'sms',
         senderPhone: voiceMsg.sender_phone,
         senderName: voiceMsg.sender_name,
@@ -1040,6 +1070,7 @@ async function handleGoogleVoiceText(email) {
         businessDescription,
         appointmentContext
       });
+      }
     } else {
       const shouldDetectTone = config.behavior?.tone_matching !== false;
       const detectedTone = shouldDetectTone ? await tone.detectTone(voiceMsg.body) : 'neutral';
@@ -1241,7 +1272,7 @@ async function handleNewEmail(email) {
       channel: 'email'
     });
 
-    log.info('index', `Email role classification for ${email.from_email}: Role=${classification.detected_role}, Intent=${classification.detected_intent}, Workflow=${classification.workflow}`);
+    log.info('index', `Email role classification for ${email.from_email}: Role=${classification.detected_role}, Intent=${classification.current_intent}, Workflow=${classification.workflow}`);
 
     let reply;
 
@@ -1298,6 +1329,7 @@ async function handleNewEmail(email) {
     ) {
       const isEmergency = customerModule.checkEmergencyKeywords(fullEmailContent);
       const isEscalation = customerModule.checkEscalationKeywords(fullEmailContent);
+      const isSwearing = customerModule.checkSwearing(fullEmailContent);
 
       let extracted = {};
       try {
@@ -1312,34 +1344,51 @@ async function handleNewEmail(email) {
           customer_name: email.from_name || extracted.customer_name || 'Homeowner',
           email: email.from_email,
           lead_source: 'incoming_email',
-          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : null),
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : ((isEscalation || isSwearing) ? 'HUMAN_REVIEW_REQUIRED' : null),
           ...extracted
         });
       } else {
         currentCust = customerModule.updateCustomer(currentCust.customer_id, {
-          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : (isEscalation ? 'HUMAN_REVIEW_REQUIRED' : currentCust.escalation_status),
+          escalation_status: isEmergency ? 'EMERGENCY_REVIEW' : ((isEscalation || isSwearing) ? 'HUMAN_REVIEW_REQUIRED' : currentCust.escalation_status),
           ...extracted
         });
       }
 
-      if (isEmergency) {
+      if (isSwearing) {
         const handoff = customerModule.formatHandoffSummary({
           customer: currentCust,
-          issue: '🚨 ACTIVE EMERGENCY DETECTED VIA EMAIL',
-          urgency: 'Immediate',
-          whatCustomerWants: 'Emergency restoration / stabilization assessment',
-          nextAction: 'Contact customer immediately by phone/email and dispatch emergency team'
-        });
-        await gmail.sendOwnerNotification(handoff);
-      } else if (isEscalation) {
-        const handoff = customerModule.formatHandoffSummary({
-          customer: currentCust,
-          issue: '⚠️ HUMAN REVIEW / ESCALATION REQUESTED VIA EMAIL',
+          issue: '⚠️ UNPROFESSIONAL CONDUCT / SWEARING DETECTED VIA EMAIL',
           urgency: 'High',
-          whatCustomerWants: extracted.escalation_reason || 'Direct communication with owner/manager'
+          whatCustomerWants: 'Customer expressed frustration/anger'
         });
         await gmail.sendOwnerNotification(handoff);
-      }
+        
+        reply = "I understand you're frustrated, but please maintain a professional tone. I am escalating this to a live representative who will contact you as soon as they are available.";
+        
+        doNotContact.addToDoNotContact({ 
+          identifier: email.from_email, 
+          name: email.from_name || currentCust.customer_name, 
+          reason: 'Swearing / Escalated to Admin' 
+        });
+      } else {
+        if (isEmergency) {
+          const handoff = customerModule.formatHandoffSummary({
+            customer: currentCust,
+            issue: '🚨 ACTIVE EMERGENCY DETECTED VIA EMAIL',
+            urgency: 'Immediate',
+            whatCustomerWants: 'Emergency restoration / stabilization assessment',
+            nextAction: 'Contact customer immediately by phone/email and dispatch emergency team'
+          });
+          await gmail.sendOwnerNotification(handoff);
+        } else if (isEscalation) {
+          const handoff = customerModule.formatHandoffSummary({
+            customer: currentCust,
+            issue: '⚠️ HUMAN REVIEW / ESCALATION REQUESTED VIA EMAIL',
+            urgency: 'High',
+            whatCustomerWants: extracted.escalation_reason || 'Direct communication with owner/manager'
+          });
+          await gmail.sendOwnerNotification(handoff);
+        }
 
       reply = await llama.generateCustomerReply({
         channel: 'email',
@@ -1353,6 +1402,7 @@ async function handleNewEmail(email) {
         businessDescription,
         appointmentContext
       });
+      }
     } else {
       const contactRole = contact?.relationship || 'acquaintance';
       reply = await llama.generateEmailReply(

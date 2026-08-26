@@ -350,6 +350,8 @@ const EMERGENCY_KEYWORDS = [
   'foundation collapsing', 'emergency', 'immediate danger', 'hazard'
 ];
 
+const SWEARING_KEYWORDS = ['fuck', 'shit', 'bitch', 'asshole', 'cunt', 'bastard', 'dumbass', 'dumb fuck'];
+
 const ESCALATION_KEYWORDS = [
   'lawyer', 'attorney', 'sue', 'lawsuit', 'litigation', 'legal action',
   'better business bureau', 'bbb', 'attorney general', 'dcp', 'consumer protection',
@@ -552,6 +554,12 @@ export function checkEscalationKeywords(text) {
   return ESCALATION_KEYWORDS.some(kw => lower.includes(kw));
 }
 
+export function checkSwearing(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lower = text.toLowerCase();
+  return SWEARING_KEYWORDS.some(kw => lower.includes(kw));
+}
+
 // --- Intelligence: Lead Scoring ---
 
 export function calculateLeadScore(customer) {
@@ -658,6 +666,8 @@ export function buildCustomerSystemPrompt({
 - Communication tone: Professional, clear, helpful, calm, conversational, concise, and honest.
 - Have a natural conversation. Do not bombard the customer with 20 questions at once. Ask 1 or 2 relevant, natural follow-up questions at a time.
 - Channel: ${channel.toUpperCase()} (${channel === 'sms' ? 'Keep messages concise and mobile-friendly' : 'Use clear, well-structured email formatting'}).
+- Contact Information: DO NOT ask for contact information (email, phone, address, etc.) if it is already provided in the "CURRENT CUSTOMER CONTEXT". Only ask to verify it when completing an appointment booking by reading back what you have and asking if it is correct or if they have corrections.
+- Immediate Calls: If a customer asks for an immediate phone call (e.g. "Can I call right now"), inform them that all representatives are currently busy. Then, notify them of the next available slot on the schedule starting on the next business day (or whenever there is an opening).
 
 === STRICT MANDATORY SAFETY GUARDRAILS ===
 1. NEVER INVENT PRICING OR GIVE DEFINITIVE PHONE ESTIMATES: Always explain that costs depend on scope, materials, existing conditions, labor, and permits.

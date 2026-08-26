@@ -14,10 +14,10 @@ A record captures identity (name, phone, email, property address/city/state/zip,
 
 Both `handleGoogleVoiceText` and `handleNewEmail` in `index.js` follow the same shape once role-router routes to the customer workflow:
 
-1. `checkEmergencyKeywords` / `checkEscalationKeywords` scan the raw message against the `EMERGENCY_KEYWORDS` (flooding, structural collapse, fire/gas, etc.) and `ESCALATION_KEYWORDS` (lawyer/BBB/media/"speak to a human", etc.) lists — deterministic substring matching, not an LLM call, so these can never be talked around by phrasing.
+1. `checkEmergencyKeywords`, `checkEscalationKeywords`, and `checkSwearing` scan the raw message against their respective keyword lists (flooding, structural collapse, fire/gas, lawyer/BBB, profanity, etc.) — deterministic substring matching, not an LLM call, so these can never be talked around by phrasing.
 2. `llama.extractCustomerIntake(text, existingRecord)` asks the model to pull structured fields (name, address, project type/description, urgency, insurance involvement, etc.) out of the free-text message, seeded with whatever's already on file so a second message fills gaps rather than overwriting known answers.
 3. `createOrUpdateCustomer` persists the merged result.
-4. `llama.generateCustomerReply` drafts the actual reply, built from `buildCustomerSystemPrompt` (see below) plus the extracted intake data — falling through to `formatHandoffSummary` and an owner notification instead of an ordinary reply when the emergency/escalation flags are set.
+4. `llama.generateCustomerReply` drafts the actual reply, built from `buildCustomerSystemPrompt` (see below) plus the extracted intake data. However, if emergency, escalation, or swearing flags are set, this normal reply falls through: emergencies and standard escalations send an owner notification, while swearing additionally replies to the customer with a professional warning and permanently adds them to the Do-Not-Contact list so Aigentik ignores them until an admin intervenes.
 
 ## The system prompt and its guardrails
 
