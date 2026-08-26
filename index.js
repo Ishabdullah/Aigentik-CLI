@@ -261,19 +261,28 @@ async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, s
   );
 }
 
-// Stage 1 of a fresh request: reply with one sentence naturally
-// acknowledging what they actually said, followed by a single combined
-// template asking for everything Aigentik still needs. Their opening
-// message (or an existing contact record) may already contain some of
-// name/address/phone — those fields are extracted/applied up front and
-// dropped from the ask instead of being requested again.
-async function sendIntakeForm({ negotiation, text, contact, reply }) {
+// Stage 1 of a fresh request — a live secretary doesn't hand a caller a
+// checklist, they ask a couple of natural follow-up questions based on
+// what's already been said. Their opening message (or an existing contact
+// record) may already contain name/address/phone AND a stated call-vs-
+// in-person preference — all of that is extracted/applied up front and
+// dropped from the ask instead of being requested again. Address is only
+// ever asked for when it's actually needed (an in-person visit), never
+// asked for as a blanket default the way a checklist would.
+async function sendIntakeForm({ negotiation, text, contact, reply, senderLabel }) {
   let acknowledgment = '';
   try {
     acknowledgment = await llama.generateAcknowledgment(text, config.aigentik_name, config.business_name, config.business_description);
   } catch (e) {
     log.error('index', 'Failed to generate acknowledgment', { error: e.message });
   }
+
+  // A caller who opens with "we'd rather just discuss it over the phone"
+  // has already answered the call-vs-in-person question — asking it again
+  // in the same breath as acknowledging what they said would be exactly
+  // the kind of not-listening a real secretary never does.
+  const detectedType = calendarModule.detectAppointmentTypeFromText(text);
+  if (detectedType) negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
 
   let extracted = {};
   try {
@@ -283,27 +292,40 @@ async function sendIntakeForm({ negotiation, text, contact, reply }) {
   }
   if (contact?.id) contacts.applyExtractedDetails(contact.id, extracted);
   const freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
-  const missing = contacts.getMissingFields(freshContact, ['name', 'address', 'phone']);
+  // requiredFieldsForType only pulls in 'address' for an in-person visit —
+  // if the type isn't known yet, ask for it conditionally alongside the
+  // call-vs-visit question below rather than demanding it up front.
+  const requiredNow = detectedType ? requiredFieldsForType(detectedType) : ['name', 'email', 'phone'];
+  const missing = contacts.getMissingFields(freshContact, requiredNow);
 
-  const asks = [];
-  if (missing.includes('name')) asks.push('• Your full name');
-  if (missing.includes('address')) asks.push('• Your address');
-  if (missing.includes('phone')) asks.push('• A phone number');
-  asks.push(
-    "• Whether you'd prefer a phone call or an in-person visit",
-    '• Your best available date/time (or best time to call, if a call works better)',
-    "• Any specific issues or concerns you'd like addressed"
-  );
+  const sentences = [];
+  const basics = [];
+  if (missing.includes('name')) basics.push('your name');
+  if (missing.includes('phone')) basics.push('a good phone number');
+  if (missing.includes('address')) basics.push('the property address');
+  if (basics.length) {
+    const basicsText = basics.length > 1
+      ? basics.slice(0, -1).join(', ') + (basics.length > 2 ? ',' : '') + ' and ' + basics[basics.length - 1]
+      : basics[0];
+    sentences.push(`Could you send over ${basicsText}?`);
+  }
 
-  const form = [
-    'To get this scheduled, could you send over:',
-    ...asks,
-    '',
-    "Once I have that, I'll check the calendar and get back to you with a confirmed time."
-  ].join('\n');
+  if (!detectedType) {
+    sentences.push("Also, would a phone call work to go over the details, or would you rather someone come take a look in person? (If in-person, I'll just need the address too.)");
+  }
 
-  await reply(acknowledgment ? `${acknowledgment}\n\n${form}` : form);
+  sentences.push("And what's the best date/time for you, or best time to reach you if a call works better?");
+
+  const form = sentences.join(' ');
+
+  await reply(acknowledgment ? `${acknowledgment} ${form}` : form);
   calendarModule.markFormSent(negotiation.id);
+  await gmail.sendOwnerNotification(
+    `📋 New scheduling inquiry from ${contact?.name || senderLabel}:\n` +
+    `They said: "${text.substring(0, 200)}"\n` +
+    (detectedType ? `Detected preference: ${detectedType === 'in_person' ? 'in-person visit' : 'phone call'}\n` : '') +
+    `Asked for: ${[...basics, !detectedType ? 'call vs. in-person preference' : null, 'preferred date/time'].filter(Boolean).join(', ')}`
+  );
   return true;
 }
 
@@ -456,7 +478,7 @@ async function negotiateTime({ negotiation, text, adminEmail, senderLabel, reply
 //   3. Once a time's been offered, pure back-and-forth on picking one.
 async function advanceScheduling({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel }) {
   if (!negotiation.form_sent) {
-    return await sendIntakeForm({ negotiation, text, contact, reply });
+    return await sendIntakeForm({ negotiation, text, contact, reply, senderLabel });
   }
   if (negotiation.offered_slots.length === 0) {
     return await processIntakeReply({ negotiation, text, contact, channel, target, subject, voiceMsg, reply, adminEmail, senderLabel });

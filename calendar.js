@@ -497,8 +497,15 @@ function setAppointmentNotes(id, notes) {
 // whole intake flow.
 function detectAppointmentTypeFromText(text) {
   const lower = (text || '').toLowerCase();
-  if (/\b(in[\s-]?person|come (over|by)|at (my|your|the) (home|house|office|place)|visit|on[\s-]?site|drop by)\b/.test(lower)) return 'in_person';
-  if (/\b(call|phone call|video call|zoom|virtual|over the phone|on the phone)\b/.test(lower)) return 'call';
+  const matchesCall = /\b(call|phone call|video call|zoom|virtual|over the phone|on the phone|call me|give (me|us) a call|just (talk|discuss) (over|on) the phone)\b/.test(lower);
+  // A negated visit ("no need for anyone to come out, we can just talk on
+  // the phone") would otherwise match the in-person pattern below on
+  // "come out" alone — a plain regex has no concept of negation, so check
+  // for it explicitly and let an explicit call mention win.
+  const negatesVisit = /\b(no need|don'?t need|not necessary|no reason)\b[^.!?]{0,40}\b(come|visit|stop by|in[\s-]?person)\b/.test(lower);
+  if (negatesVisit && matchesCall) return 'call';
+  if (/\b(in[\s-]?person|come (over|by|out|check|take a look|look at)|someone (come|stop by)|stop by|at (my|your|the) (home|house|office|place)|visit|on[\s-]?site|drop by)\b/.test(lower)) return 'in_person';
+  if (matchesCall) return 'call';
   return null;
 }
 
