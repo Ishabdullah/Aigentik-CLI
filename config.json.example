@@ -31,15 +31,31 @@
     "threads": 4
   },
   "llm": {
-    "provider": "local"                      // "local" (default, on-device) or "gemini" (cloud) —
-                                              // see "use gemini" / "use local" owner commands to
-                                              // switch at runtime without restarting
+    "provider": "local"                      // "local" (default, on-device), "gemini" (Google AI
+                                              // Studio, cloud), or "vertex" (Google Vertex AI /
+                                              // Express Mode, cloud) — see "use gemini" / "use vertex" /
+                                              // "use local" owner commands to switch at runtime
+                                              // without restarting
   },
   "gemini": {
-    "api_key": "",                           // Your Google AI Studio / Gemini API key — required
-                                              // only if llm.provider is (or will be switched to) "gemini"
+    "api_key": "",                           // A Google AI Studio key (aistudio.google.com/apikey) —
+                                              // required only if llm.provider is/becomes "gemini".
+                                              // NOT the same as a Vertex AI key below — AI Studio and
+                                              // Vertex AI are different products with different key
+                                              // formats (AI Studio keys start "AIzaSy...") even though
+                                              // both serve Gemini models.
     "model": "gemini-2.0-flash",
     "host": "https://generativelanguage.googleapis.com/v1beta/openai"
+  },
+  "vertex": {
+    "api_key": "",                           // A Vertex AI (Express Mode) API key from Cloud Console —
+                                              // required only if llm.provider is/becomes "vertex". Keys
+                                              // often start "AQ." and are bound to a service account;
+                                              // this is a different Google product/API from "gemini"
+                                              // above, with its own request format and quota.
+    "model": "gemini-2.5-flash",             // 2.0/1.5-series models 404 under Express Mode even when
+                                              // available on AI Studio — 2.5-flash is confirmed working
+    "host": "https://aiplatform.googleapis.com/v1"
   },
   "sms": {
     "poll_interval_ms": 30000,

@@ -29,9 +29,10 @@ Say/text/email any of these to the admin number or `admin_email`. A handful of e
 | `blocked` / `do not contact list` / `dnc list` | Show everyone on the do-not-contact list |
 | `rename [name]` | Change what Aigentik calls itself |
 | `business info` / `company info` / `who do you work for` | Show the currently set business name/description |
-| `use gemini` / `switch to gemini` | Switch the AI backend to Gemini (fails with a clear message if no API key is configured) — see [Configuration reference](configuration.md) |
+| `use gemini` / `switch to gemini` | Switch the AI backend to Gemini (Google AI Studio) — fails with a clear message if no API key is configured — see [Configuration reference](configuration.md) |
+| `use vertex` / `switch to vertex` | Switch the AI backend to Vertex AI (Express Mode) — a different Google product/API from Gemini above |
 | `use local` / `switch to local` / `use qwen` | Switch the AI backend back to the local model |
-| `ai status` / `llm status` / `which ai` | Show which AI provider (`local` or `gemini`) is currently active |
+| `ai status` / `llm status` / `which ai` | Show which AI provider (`local`, `gemini`, or `vertex`) is currently active |
 
 ## Natural-language commands
 

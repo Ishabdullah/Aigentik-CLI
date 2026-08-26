@@ -249,6 +249,11 @@ async function handleOwnerCommand(sms) {
     reply((result.ok ? '🤖 ' : '⚠️ ') + result.message);
     return;
   }
+  if (lower === 'use vertex' || lower === 'switch to vertex' || lower === 'use vertex ai') {
+    const result = llama.setLlmProvider('vertex');
+    reply((result.ok ? '🤖 ' : '⚠️ ') + result.message);
+    return;
+  }
   if (lower === 'use local' || lower === 'use local ai' || lower === 'switch to local' || lower === 'use qwen') {
     const result = llama.setLlmProvider('local');
     reply((result.ok ? '🤖 ' : '⚠️ ') + result.message);
