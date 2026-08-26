@@ -354,8 +354,24 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
   // checking for a date/time in this message. Parse it once, up front, and
   // remember it on the negotiation so it's honored once intake is actually
   // complete instead of being forgotten in favor of generic offered slots.
-  const statedDate = calendarModule.parseDatetimePhrase(text);
-  if (statedDate) negotiation = calendarModule.setRequestedDatetime(negotiation.id, statedDate.toISOString()) || negotiation;
+  const isImmediate = /\b(right now|immediately|asap|as soon as possible|this minute|right away)\b/i.test(text);
+  let statedDate = null;
+  let immediateReply = '';
+
+  if (isImmediate) {
+    const nextBusinessDay = new Date();
+    do {
+      nextBusinessDay.setDate(nextBusinessDay.getDate() + 1);
+    } while (nextBusinessDay.getDay() === 0 || nextBusinessDay.getDay() === 6);
+    nextBusinessDay.setHours(8, 0, 0, 0);
+    const duration = calendarModule.getDurationForRelationship(contact?.relationship);
+    const nextSlot = calendarModule.findNextAvailableSlot({ afterDate: nextBusinessDay, durationMinutes: duration });
+    const slotText = nextSlot ? `on ${new Date(nextSlot.start).toLocaleString()}` : 'as soon as there is an opening';
+    immediateReply = `I'm sorry, but all available representatives are currently busy. The next available slot is ${slotText}. `;
+  } else {
+    statedDate = calendarModule.parseDatetimePhrase(text);
+    if (statedDate) negotiation = calendarModule.setRequestedDatetime(negotiation.id, statedDate.toISOString()) || negotiation;
+  }
 
   let extracted = {};
   try {
@@ -411,7 +427,7 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
       } catch (e) {
         log.error('index', 'Failed to generate answer for off-topic intake reply', { error: e.message });
       }
-      await reply(answer ? `${answer}\n\n${ask}` : `Thanks! ${ask}`);
+      await reply(immediateReply ? `${immediateReply}\n\n${answer}\n\n${ask}` : (answer ? `${answer}\n\n${ask}` : `Thanks! ${ask}`));
       return true;
     }
 
@@ -419,7 +435,7 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
     // banking it — a real secretary repeats back what they heard rather
     // than leaving the caller to wonder if it registered at all.
     const timeAck = statedDate ? `Got it, noting ${statedDate.toLocaleString()} as your preference. ` : '';
-    await reply(`Thanks! ${timeAck}${ask}`);
+    await reply(immediateReply ? `${immediateReply}\n\n${ask}` : `Thanks! ${timeAck}${ask}`);
     return true;
   }
 
@@ -432,6 +448,25 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
   // forgetting it was ever said and defaulting straight to generic offers.
   const requestedDate = statedDate || (negotiation.requested_datetime ? new Date(negotiation.requested_datetime) : null);
   const typeLabel = negotiation.appointment_type === 'in_person' ? 'in-person appointment' : 'phone call';
+
+  if (isImmediate) {
+    const nextBusinessDay = new Date();
+    do {
+      nextBusinessDay.setDate(nextBusinessDay.getDate() + 1);
+    } while (nextBusinessDay.getDay() === 0 || nextBusinessDay.getDay() === 6);
+    nextBusinessDay.setHours(8, 0, 0, 0);
+    const slot = calendarModule.findNextAvailableSlot({ afterDate: nextBusinessDay, durationMinutes: duration });
+    
+    if (!slot) {
+      await reply("I'm sorry, but all available representatives are currently busy and I'm not able to find any open slots soon. I'll have my owner reach out directly.");
+      await gmail.sendOwnerNotification(`⚠️ Customer requested immediate call, but no slots available. (${senderLabel})`);
+      return true;
+    }
+    
+    calendarModule.updateNegotiationOffers(negotiation.id, [slot]);
+    await reply(`I'm sorry, but all available representatives are currently busy. The next available slot is on ${new Date(slot.start).toLocaleString()}. Does that work for you, or suggest another time?`);
+    return true;
+  }
 
   if (!requestedDate) {
     const offers = calendarModule.generateOfferSlots({ durationMinutes: duration, afterDate, count: 3 });
