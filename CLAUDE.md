@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Picking this project up fresh, or asked "where are we at"?** Read [`HANDOFF.md`](HANDOFF.md) first — it points at the commands and docs that give the current, ground-truth answer, rather than a status snapshot that would go stale.
+
 ## What this is
 
 Aigentik is a personal AI assistant built to run entirely on-device in Termux (Android), though the Node.js application itself isn't Android-specific and also runs on regular Linux (useful for development). It watches a Gmail inbox over IMAP IDLE, drafts/sends replies via a local LLM (Qwen served by `llama.cpp`), and is controlled entirely through natural language — either by texting a Google Voice number or emailing the monitored inbox directly. There is no cloud AI, no external API key, and no server component; the model and all data live on the phone (or dev machine). `README.md` is now a short pitch/quick-start page; full behavioral documentation lives under `docs/` (see `docs/architecture.md`, `docs/commands.md`, `docs/scheduling.md`, etc.) — read the relevant doc before making non-trivial changes, since a lot of the "why" here isn't inferrable from the code alone.
