@@ -381,6 +381,38 @@ function formatOfferList(offers) {
   return offers.map((s, i) => `${i + 1}. ${new Date(s.start).toLocaleString()}`).join('\n');
 }
 
+const ORDINAL_WORDS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth'];
+
+// formatOfferList numbers its options 1/2/3 — a reply of bare "3", "option
+// 2", "the first one", etc. is exactly how a person actually answers a
+// numbered list, and none of that is a parseable date/time on its own
+// (chrono-node has no idea "3" means "the third option above"). Returns a
+// 0-based index into `offers`, or null if the text doesn't read as picking
+// one by position.
+function matchOfferedSlotSelection(text, offerCount) {
+  const lower = (text || '').toLowerCase().trim();
+
+  const bareOrOptionNumber = lower.match(/^(?:#|option|number|choice)?\s*(\d+)\.?$/) ||
+    lower.match(/\b(?:option|number|choice)\s*#?\s*(\d+)\b/);
+  if (bareOrOptionNumber) {
+    const n = parseInt(bareOrOptionNumber[1], 10);
+    if (n >= 1 && n <= offerCount) return n - 1;
+  }
+
+  if (/\b(last|final)\s+(one|option|slot|time)?\b/.test(lower) || lower === 'last') {
+    return offerCount - 1;
+  }
+
+  for (let i = 0; i < ORDINAL_WORDS.length && i < offerCount; i++) {
+    const word = ORDINAL_WORDS[i];
+    if (new RegExp(`\\b${word}\\b`).test(lower) || lower.includes(`${i + 1}st`) || lower.includes(`${i + 1}nd`) || lower.includes(`${i + 1}rd`) || lower.includes(`${i + 1}th`)) {
+      return i;
+    }
+  }
+
+  return null;
+}
+
 // ─── Appointments ───────────────────────────────────────────────────────────
 
 function createAppointment({ title, start, end, contactId, attendeeName, attendeeEmail, createdVia, notes, appointmentType }) {
@@ -716,6 +748,7 @@ export {
   findNextAvailableSlot,
   generateOfferSlots,
   formatOfferList,
+  matchOfferedSlotSelection,
   detectAppointmentTypeFromText,
   createAppointment,
   proposeAppointment,

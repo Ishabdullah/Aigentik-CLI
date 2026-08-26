@@ -438,6 +438,19 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
 // picking/proposing a time — everything else (type, contact info) was
 // already settled in stage 2.
 async function negotiateTime({ negotiation, text, adminEmail, senderLabel, reply }) {
+  // formatOfferList shows the options as "1. ... / 2. ... / 3. ...", and a
+  // reply of bare "3" (or "option 2", "the first one") is exactly how a
+  // person actually answers that — not a date/time phrase chrono-node could
+  // ever parse on its own, so it has to be checked for before falling
+  // through to date/time parsing below.
+  const selectedIndex = calendarModule.matchOfferedSlotSelection(text, negotiation.offered_slots.length);
+  if (selectedIndex !== null) {
+    const chosen = negotiation.offered_slots[selectedIndex];
+    const slot = { start: new Date(chosen.start), end: new Date(chosen.end) };
+    await confirmAndClose({ negotiation, slot, attendeeEmail: negotiation.attendee_email, adminEmail, senderLabel, reply });
+    return true;
+  }
+
   // A bare time with no date ("could we do 11am instead?") means "that time
   // on the date we're already discussing," not "11am relative to right
   // now" — anchor it to the first currently-offered slot's date instead of
