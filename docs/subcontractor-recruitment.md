@@ -43,9 +43,9 @@ See [Owner command reference](commands.md) for the full list; the recruitment-sp
 | `request subcontractor docs [x]` | Sets `DOCUMENTS_REQUESTED` and reports the current missing-document list |
 | `subcontractor followups` / `sub followups` / `pending followups` | `formatFollowupList()` — candidates in `FOLLOW_UP_REQUESTED`, `CONTACTED`, `DOCUMENTS_REQUESTED`, or `QUALIFIED_PENDING_DOCUMENTS` |
 
-## Storage path — a known inconsistency
+## Storage path
 
-Every other data file in this codebase (`contacts.json`, `customers.json`, `calendar.json`, etc.) is written under `config.paths.data_dir`. `subcontractor-recruiter.js` instead computes its own path — `path.join(__dirname, 'data', 'subcontractors.json')`, i.e. always relative to wherever this source file lives on disk — and never reads `config.paths.data_dir` at all. In the default install these resolve to the same directory, so it isn't currently causing visible problems, but a `data_dir` pointed anywhere else (e.g. external storage) would silently split subcontractor records into a different location than every other CRM/contact file. Worth fixing to use `config.paths.data_dir` like `customer-module.js` and `contacts.js` do, if `data_dir` is ever configured away from the default.
+`subcontractors.json` is written under `config.paths.data_dir`, same as every other data file — see [Data files](data-files.md).
 
 ---
 

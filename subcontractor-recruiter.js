@@ -3,7 +3,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import config from './config.json' with { type: 'json' };
 import log from './logger.js';
 import * as contacts from './contacts.js';
 import {
@@ -14,8 +14,7 @@ import {
   isRecognizedTrade
 } from './trades.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SUBCONTRACTORS_FILE = path.join(__dirname, 'data', 'subcontractors.json');
+const SUBCONTRACTORS_FILE = path.join(config.paths?.data_dir || './data', 'subcontractors.json');
 
 // Qualification Status Taxonomy
 const QUALIFICATION_STATUSES = {

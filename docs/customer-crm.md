@@ -44,7 +44,7 @@ See [Owner command reference](commands.md) for the full list; the customer-CRM-s
 
 ## Storage note
 
-`data/customers.json` is created on first use by `loadCustomers()`, under `config.paths.data_dir` like the rest of `data/` — see [Data files](data-files.md). Unlike `subcontractor-recruiter.js`'s `subcontractors.json` (see that module's note on its own storage path), this module correctly reads the configured `data_dir` rather than hardcoding a path relative to the source file.
+`data/customers.json` is created on first use by `loadCustomers()`, under `config.paths.data_dir` like the rest of `data/` — see [Data files](data-files.md).
 
 ---
 

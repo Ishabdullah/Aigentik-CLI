@@ -8,7 +8,7 @@ Everything persistent lives under `data/` (configurable via `paths.data_dir` —
 |---|---|
 | `contacts.json` | The [contact directory](contacts.md) |
 | `customers.json` | The [customer CRM](customer-crm.md) pipeline |
-| `subcontractors.json` | The [subcontractor recruitment](subcontractor-recruitment.md) pipeline — note: written next to `subcontractor-recruiter.js` itself, not under `paths.data_dir` (see that doc's storage-path note) |
+| `subcontractors.json` | The [subcontractor recruitment](subcontractor-recruitment.md) pipeline |
 | `email-rules.json` | Saved email rules — see [Rule engines](rules.md) |
 | `sms-rules.json` | Saved Google Voice rules — see [Rule engines](rules.md) |
 | `calendar.json` | Appointment records — see [Appointment scheduling](scheduling.md) |
