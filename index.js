@@ -210,8 +210,14 @@ function requiredFieldsForType(appointmentType) {
 // Appended to every booking/reschedule confirmation — invites follow-up
 // questions/changes and sets the expectation of a confirmation call before
 // the appointment, per the intake script.
-function closingReassurance() {
-  return "\n\nIf anything changes or you have any questions or concerns in the meantime, feel free to reach back out — we're happy to help or get you rebooked. We'll also give you a call before your appointment to confirm the time and make sure you get a chance to speak with one of our qualified technicians beforehand.";
+// The pre-appointment confirmation call only makes sense ahead of an
+// in-person visit — there's nothing to confirm-by-phone before an
+// appointment that already *is* a phone call.
+function closingReassurance(appointmentType) {
+  const callAhead = appointmentType === 'in_person'
+    ? " We'll also give you a call before your appointment to confirm the time and make sure you get a chance to speak with one of our qualified technicians beforehand."
+    : '';
+  return "\n\nIf anything changes or you have any questions or concerns in the meantime, feel free to reach back out — we're happy to help or get you rebooked." + callAhead;
 }
 
 // Calendar invite emails routinely land in spam for a first-time sender, so
@@ -254,7 +260,7 @@ async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, s
   await reply(
     `You're all set! ${typeLabel} on ${new Date(appt.start).toLocaleString()}.` +
     (attendeeEmail ? inviteSentNote() : '') +
-    closingReassurance()
+    closingReassurance(appt.appointment_type)
   );
   await gmail.sendOwnerNotification(
     `📅 Appointment confirmed with ${appt.attendee_name || senderLabel} (${typeLabel}): ${new Date(appt.start).toLocaleString()}\n\n${details}`
@@ -586,7 +592,7 @@ async function handleRescheduleRequest({ classified, contact, reply, adminEmail,
     await reply(
       `Got it — moved to ${new Date(updated.start).toLocaleString()}.` +
       (updated.attendee_email ? inviteSentNote() : ' Updated invite sent.') +
-      closingReassurance()
+      closingReassurance(updated.appointment_type)
     );
     await gmail.sendOwnerNotification(
       `🔁 Appointment rescheduled for ${contact?.name || senderLabel}: now ${new Date(updated.start).toLocaleString()}\n\n${details}`
@@ -630,7 +636,7 @@ async function handleRescheduleReply({ appt, text, reply, adminEmail, senderLabe
     await reply(
       `Got it — moved to ${new Date(updated.start).toLocaleString()}.` +
       (updated.attendee_email ? inviteSentNote() : ' Updated invite sent.') +
-      closingReassurance()
+      closingReassurance(updated.appointment_type)
     );
     await gmail.sendOwnerNotification(
       `🔁 Appointment rescheduled for ${senderLabel}: now ${new Date(updated.start).toLocaleString()}\n\n${details}`
