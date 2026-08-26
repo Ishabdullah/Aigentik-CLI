@@ -461,6 +461,22 @@ async function extractSubcontractorDetails(text) {
   }
 }
 
+// Verified live against a real conversation: instead of returning null for
+// an address that was never actually given, the model fabricated a
+// plausible-looking one (Google's own headquarters address — almost
+// certainly the single most common "example address" in its training
+// data). "Use null" as a prompt instruction alone isn't reliable enough to
+// trust for something that gets silently written to a customer record and
+// then handed to a technician — so a genuine address is required to carry
+// at least one distinctive number (house number, zip) that actually
+// appears in what the person typed. A hallucinated one won't.
+function isAddressGrounded(address, sourceText) {
+  if (!address || !sourceText) return false;
+  const numbers = String(address).match(/\d{2,}/g);
+  if (!numbers) return true; // nothing numeric to check against (e.g. just a city/state) — let it through
+  return numbers.some(n => sourceText.includes(n));
+}
+
 async function extractContactDetails(text, fields) {
   const schema = '{' + fields.map(f => `"${f}":"string|null"`).join(',') + '}';
   const systemMsg = `Extract the following contact details if mentioned in this message: ${fields.join(', ')}. Return ONLY valid JSON: ${schema}. Use null for anything not mentioned. "address" means a home/mailing address.`;
@@ -468,13 +484,17 @@ async function extractContactDetails(text, fields) {
     { role: 'system', content: systemMsg },
     { role: 'user', content: `Message: "${text}"` }
   ];
-  const raw = await chat(messages, 200);
   try {
+    const raw = await chat(messages, 200);
     const parsed = extractJson(raw);
-    if (parsed) return parsed;
-    throw new Error('No JSON object found in response');
+    if (!parsed) throw new Error('No JSON object found in response');
+    if (parsed.address && !isAddressGrounded(parsed.address, text)) {
+      log.warn('llama', 'Discarding ungrounded address extraction (likely hallucinated)', { extracted: parsed.address, source: text.slice(0, 150) });
+      parsed.address = null;
+    }
+    return parsed;
   } catch (e) {
-    log.warn('llama', 'Failed to parse extracted contact details', { raw, error: e.message });
+    log.warn('llama', 'Failed to extract contact details', { error: e.message });
     return fields.reduce((o, f) => { o[f] = null; return o; }, {});
   }
 }
@@ -630,7 +650,13 @@ async function extractCustomerIntake(message, currentData = {}) {
   try {
     const raw = await chat(messages, 400);
     const parsed = extractJson(raw);
-    return parsed || {};
+    if (!parsed) return {};
+    // Same hallucination risk (and same fix) as extractContactDetails' address field.
+    if (parsed.property_address && !isAddressGrounded(parsed.property_address, message)) {
+      log.warn('llama', 'Discarding ungrounded property_address extraction (likely hallucinated)', { extracted: parsed.property_address, source: message.slice(0, 150) });
+      parsed.property_address = null;
+    }
+    return parsed;
   } catch (err) {
     log.warn('llama', 'Failed to extract customer intake JSON', { error: err.message });
     return {};
