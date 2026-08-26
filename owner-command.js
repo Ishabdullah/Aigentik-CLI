@@ -240,6 +240,25 @@ async function handleOwnerCommand(sms) {
     return;
   }
 
+  // AI provider switch — exact-match shorthand on purpose, not routed
+  // through interpretCommand: this is the escape hatch when the currently
+  // active provider itself is the thing that's broken, so it can't depend
+  // on an AI call succeeding to execute.
+  if (lower === 'use gemini' || lower === 'switch to gemini' || lower === 'use gemini ai') {
+    const result = llama.setLlmProvider('gemini');
+    reply((result.ok ? '🤖 ' : '⚠️ ') + result.message);
+    return;
+  }
+  if (lower === 'use local' || lower === 'use local ai' || lower === 'switch to local' || lower === 'use qwen') {
+    const result = llama.setLlmProvider('local');
+    reply((result.ok ? '🤖 ' : '⚠️ ') + result.message);
+    return;
+  }
+  if (lower === 'ai status' || lower === 'llm status' || lower === 'which ai') {
+    reply(`🤖 Currently using: ${llama.getLlmProvider()}`);
+    return;
+  }
+
   // List email rules
   if (lower === 'email rules' || lower === 'list email rules') {
     reply(emailRules.listRulesForSms());
@@ -1303,6 +1322,16 @@ Return ONLY JSON.`;
 
     case 'list_do_not_contact':
       reply(doNotContact.listDoNotContact());
+      break;
+
+    case 'switch_ai_provider': {
+      const result = llama.setLlmProvider(cmd.target);
+      reply((result.ok ? '🤖 ' : '⚠️ ') + result.message);
+      break;
+    }
+
+    case 'ai_status':
+      reply(`🤖 Currently using: ${llama.getLlmProvider()}`);
       break;
 
     case 'generate_content': {

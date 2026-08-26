@@ -1338,17 +1338,20 @@ async function main() {
 
   loadProfile();
 
-  // Start llama-server
-  const llamaOk = await startLlamaServer();
-  if (!llamaOk) {
-    log.error('index', 'Cannot start without llama-server');
-    process.exit(1);
+  // Only spin up the local llama-server when it's actually the configured
+  // provider — a Gemini-only setup has no local model to launch or wait on.
+  if (llama.getLlmProvider() === 'local') {
+    const llamaOk = await startLlamaServer();
+    if (!llamaOk) {
+      log.error('index', 'Cannot start without llama-server');
+      process.exit(1);
+    }
   }
 
-  // Warm up AI
+  // Warm up AI (whichever provider is configured)
   const warmedUp = await llama.warmUp();
   if (!warmedUp) {
-    log.error('index', 'llama-server not responding');
+    log.error('index', `AI provider (${llama.getLlmProvider()}) not responding`);
     process.exit(1);
   }
 
