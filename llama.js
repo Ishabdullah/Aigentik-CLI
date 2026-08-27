@@ -676,7 +676,44 @@ async function warmUp() {
   }
 }
 
+async function generateIntakeAsk({ text, missingFields, needsType, needsDate, agentName, businessName, isFirstMessage }) {
+  const asks = [];
+  if (missingFields.includes('name')) asks.push('their name');
+  if (missingFields.includes('phone')) asks.push('a good phone number');
+  if (missingFields.includes('email')) asks.push('their email address');
+  if (missingFields.includes('address')) asks.push('the property address');
+  if (needsType) asks.push('whether they would prefer a phone call or an in-person visit');
+  if (needsDate) asks.push('their preferred date and time for the appointment');
+
+  if (asks.length === 0) return '';
+
+  let prompt = `You are ${agentName || 'an assistant'}, an AI intake assistant for ${businessName || 'the business'}. `;
+  
+  if (isFirstMessage) {
+    prompt += `A customer just reached out to request an estimate or appointment. Their message: "${text}".\n`;
+    prompt += `You need to greet them warmly, introduce yourself as ${agentName}, acknowledge their specific request, and then ask for the following missing information: ${asks.join(', ')}.\n`;
+  } else {
+    prompt += `You are in the middle of scheduling an appointment with a customer. Their last message: "${text}".\n`;
+    prompt += `You have successfully gathered some information, but you still need to ask for the following missing information: ${asks.join(', ')}.\n`;
+    prompt += `Acknowledge what they just provided, and seamlessly ask for the remaining missing information.\n`;
+  }
+  
+  prompt += `Write a brief, conversational response. Do NOT sound like a robotic checklist. Ask the questions naturally in one or two sentences. Do NOT include any signatures or sign-offs (like "— Restoricon").`;
+
+  const messages = [
+    { role: 'system', content: prompt }
+  ];
+  try {
+    const raw = await chat(messages, 250);
+    return raw.replace(/—.*$/s, '').trim();
+  } catch (e) {
+    log.error('llama', 'Failed to generate intake ask', { error: e.message });
+    return 'Could you please provide: ' + asks.join(', ') + '?';
+  }
+}
+
 export {
+  generateIntakeAsk,
   warmUp,
   generateEmailReply,
   generateSmsReply,

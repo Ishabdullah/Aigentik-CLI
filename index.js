@@ -280,17 +280,6 @@ async function confirmAndClose({ negotiation, slot, attendeeEmail, adminEmail, s
 // ever asked for when it's actually needed (an in-person visit), never
 // asked for as a blanket default the way a checklist would.
 async function sendIntakeForm({ negotiation, text, contact, reply, senderLabel }) {
-  let acknowledgment = '';
-  try {
-    acknowledgment = await llama.generateAcknowledgment(text, config.aigentik_name, config.business_name, config.business_description);
-  } catch (e) {
-    log.error('index', 'Failed to generate acknowledgment', { error: e.message });
-  }
-
-  // A caller who opens with "we'd rather just discuss it over the phone"
-  // has already answered the call-vs-in-person question — asking it again
-  // in the same breath as acknowledging what they said would be exactly
-  // the kind of not-listening a real secretary never does.
   const detectedType = calendarModule.detectAppointmentTypeFromText(text);
   if (detectedType) negotiation = calendarModule.setAppointmentType(negotiation.id, detectedType);
 
@@ -302,33 +291,21 @@ async function sendIntakeForm({ negotiation, text, contact, reply, senderLabel }
   }
   if (contact?.id) contacts.applyExtractedDetails(contact.id, extracted);
   const freshContact = contact?.id ? contacts.getContactById(contact.id) : contact;
-  // requiredFieldsForType only pulls in 'address' for an in-person visit —
-  // if the type isn't known yet, ask for it conditionally alongside the
-  // call-vs-visit question below rather than demanding it up front.
+  
   const requiredNow = detectedType ? requiredFieldsForType(detectedType) : ['name', 'email', 'phone'];
   const missing = contacts.getMissingFields(freshContact, requiredNow);
 
-  const sentences = [];
-  const basics = [];
-  if (missing.includes('name')) basics.push('your name');
-  if (missing.includes('phone')) basics.push('a good phone number');
-  if (missing.includes('address')) basics.push('the property address');
-  if (basics.length) {
-    const basicsText = basics.length > 1
-      ? basics.slice(0, -1).join(', ') + (basics.length > 2 ? ',' : '') + ' and ' + basics[basics.length - 1]
-      : basics[0];
-    sentences.push(`Could you send over ${basicsText}?`);
-  }
+  const form = await llama.generateIntakeAsk({
+    text,
+    missingFields: missing,
+    needsType: !detectedType,
+    needsDate: true,
+    agentName: config.aigentik_name,
+    businessName: config.business_name,
+    isFirstMessage: true
+  });
 
-  if (!detectedType) {
-    sentences.push("Also, would a phone call work to go over the details, or would you rather someone come take a look in person? (If in-person, I'll just need the address too.)");
-  }
-
-  sentences.push("And what's the best date/time for you, or best time to reach you if a call works better?");
-
-  const form = sentences.join(' ');
-
-  await reply(acknowledgment ? `${acknowledgment} ${form}` : form);
+  await reply(form);
   calendarModule.markFormSent(negotiation.id);
   await gmail.sendOwnerNotification(
     `📋 New scheduling inquiry from ${contact?.name || senderLabel}:\n` +
@@ -388,54 +365,21 @@ async function processIntakeReply({ negotiation, text, contact, channel, target,
   const stillNeedsType = !negotiation.appointment_type;
 
   if (stillNeedsType || missing.length > 0) {
-    const asks = [];
-    if (stillNeedsType) asks.push("whether you'd like a phone call or an in-person visit");
-    if (missing.length > 0) asks.push(`your ${missing.join(', ')}`);
-    const ask = `Before I can get this scheduled, could you also share ${asks.join(' and ')}?`;
+    let ask = await llama.generateIntakeAsk({
+      text,
+      missingFields: missing,
+      needsType: stillNeedsType,
+      needsDate: false,
+      agentName: config.aigentik_name,
+      businessName: config.business_name,
+      isFirstMessage: false
+    });
 
-    // If the message didn't actually contribute anything toward the intake
-    // (no field extracted, no type detected, no date/time parsed), it's
-    // likely an unrelated question rather than a partial answer to the
-    // form — answer it for real instead of silently ignoring it and just
-    // repeating the outstanding ask.
-    const contributedNothing = !detectedType &&
-      !Object.values(extracted || {}).some(v => v) &&
-      !statedDate;
-
-    if (contributedNothing) {
-      let answer = '';
-      try {
-        const ownerName = config.owner_name || null;
-        const agentName = config.aigentik_name || 'Aigentik';
-        const businessName = config.business_name || null;
-        const businessDescription = config.business_description || null;
-        if (channel === 'email') {
-          const generated = await llama.generateEmailReply(
-            senderLabel, target, subject, text,
-            freshContact?.relationship, freshContact?.instructions,
-            ownerName, agentName, businessName, businessDescription
-          );
-          answer = generated.text;
-        } else {
-          const detectedTone = await tone.detectTone(text);
-          answer = await llama.generateSmsReply(
-            voiceMsg?.sender_phone, voiceMsg?.sender_name, text, detectedTone,
-            freshContact?.relationship, freshContact?.instructions,
-            ownerName, agentName, businessName, businessDescription
-          );
-        }
-      } catch (e) {
-        log.error('index', 'Failed to generate answer for off-topic intake reply', { error: e.message });
-      }
-      await reply(immediateReply ? `${immediateReply}\n\n${answer}\n\n${ask}` : (answer ? `${answer}\n\n${ask}` : `Thanks! ${ask}`));
-      return true;
+    if (statedDate) {
+      ask = `Got it, noting ${statedDate.toLocaleString()} as your preference. ` + ask;
     }
 
-    // Acknowledge a captured time preference by name instead of silently
-    // banking it — a real secretary repeats back what they heard rather
-    // than leaving the caller to wonder if it registered at all.
-    const timeAck = statedDate ? `Got it, noting ${statedDate.toLocaleString()} as your preference. ` : '';
-    await reply(immediateReply ? `${immediateReply}\n\n${ask}` : `Thanks! ${timeAck}${ask}`);
+    await reply(immediateReply ? `${immediateReply}\n\n${ask}` : ask);
     return true;
   }
 
