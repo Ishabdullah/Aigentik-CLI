@@ -26,4 +26,4 @@ Thumbs.db
 
 # Backup files
 *.backup-*
-index.backup-*
+index.backup-*.agents/
